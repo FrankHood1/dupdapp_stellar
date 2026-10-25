@@ -424,7 +424,7 @@ fn test_release_unauthorized() {
 }
 
 #[test]
-#[should_panic(expected = "Not admin")]
+#[should_panic(expected = "Payment not found")]
 fn test_release_invalid_payment_id() {
     let (env, client, _contract_id, admin, _customer, _merchant, _usdc, ..) = setup_env();
     client.release(&admin, &make_id(&env, 99));
@@ -596,6 +596,7 @@ fn test_set_registry_unauthorized() {
 #[test]
 fn test_deposit_allowed_when_registry_approved() {
     let (env, escrow, registry, admin, customer, merchant, _usdc, ..) = setup_with_registry();
+    registry.register_merchant(&admin, &merchant, &String::from_str(&env, "Acme"));
     registry.set_kyc_status(&admin, &merchant, &true);
 
     let payment_id = make_id(&env, 42);
@@ -633,6 +634,7 @@ fn test_deposit_blocked_when_kyc_not_verified() {
 #[should_panic(expected = "Merchant is not approved")]
 fn test_deposit_blocked_when_merchant_suspended() {
     let (env, escrow, registry, admin, customer, merchant, _usdc, ..) = setup_with_registry();
+    registry.register_merchant(&admin, &merchant, &String::from_str(&env, "Acme"));
     registry.set_kyc_status(&admin, &merchant, &true);
     registry.suspend_merchant(&admin, &merchant);
 
@@ -783,7 +785,7 @@ fn test_dispute_after_partial_release_resolves_to_customer() {
     assert_eq!(payment.released_amount, 250_000_000);
 
     let token_client = token::Client::new(&env, &usdc);
-    assert_eq!(token_client.balance(&customer), 1_000_000_000);
+    assert_eq!(token_client.balance(&customer), 900_000_000);
     assert_eq!(token_client.balance(&merchant), 100_000_000);
     assert_eq!(token_client.balance(&contract_id), 0);
 }
