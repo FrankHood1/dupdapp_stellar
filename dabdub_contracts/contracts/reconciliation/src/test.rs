@@ -286,3 +286,74 @@ fn test_current_batch_still_tracks_the_latest_submission() {
     // Existing callers of get_current_batch see no behaviour change.
     assert_eq!(client.get_current_batch().unwrap().merkle_root, newest);
 }
+
+// ── Issue #1210: additional coverage ─────────────────────────────────────────
+
+#[test]
+fn test_successful_reconciliation_end_to_end() {
+    // Full flow: submit a root, verify a valid proof, confirm valid payment.
+    let (env, client, admin) = setup_env();
+
+    let payment_a = make_id(&env, 71);
+    let payment_b = make_id(&env, 72);
+    let (root, proof) = two_leaf_tree(&env, &payment_a, &payment_b);
+
+    let batch_id = client.submit_merkle_root(&admin, &root);
+
+    // verify_settlement_proof: true == valid, false == mismatch
+    assert!(client.verify_settlement_proof(&batch_id, &payment_a, &proof),
+        "valid payment should verify against its batch root");
+}
+
+#[test]
+fn test_reconciliation_with_wrong_proof_reports_mismatch() {
+    // Submitting a proof whose sibling hash does not match the committed root
+    // must return false (invalid), not true.
+    let (env, client, admin) = setup_env();
+
+    let payment_a = make_id(&env, 73);
+    let payment_b = make_id(&env, 74);
+    let (root, _correct_proof) = two_leaf_tree(&env, &payment_a, &payment_b);
+    let batch_id = client.submit_merkle_root(&admin, &root);
+
+    // Build a proof with a wrong sibling
+    let wrong_leaf = hash_leaf(&env, &make_id(&env, 99));
+    let bad_proof = vec![&env, MerkleProofNode { sibling: wrong_leaf, is_left: false }];
+
+    assert!(!client.verify_settlement_proof(&batch_id, &payment_a, &bad_proof),
+        "incorrect proof must not verify");
+}
+
+#[test]
+fn test_duplicate_root_submission_gets_distinct_batch_id() {
+    // Submitting the same root twice is permitted but creates a new batch
+    // each time. Both batch IDs independently verify their proofs correctly.
+    let (env, client, admin) = setup_env();
+
+    let payment_a = make_id(&env, 80);
+    let payment_b = make_id(&env, 81);
+    let (root, proof) = two_leaf_tree(&env, &payment_a, &payment_b);
+
+    let id1 = client.submit_merkle_root(&admin, &root);
+    let id2 = client.submit_merkle_root(&admin, &root);
+
+    assert_ne!(id1, id2, "each submission must produce a distinct batch ID");
+    assert!(client.verify_settlement_proof(&id1, &payment_a, &proof));
+    assert!(client.verify_settlement_proof(&id2, &payment_a, &proof));
+}
+
+#[test]
+fn test_proof_verification_is_idempotent() {
+    // Verifying the same payment twice against the same batch must return the
+    // same result. The contract must not consume or alter the proof on read.
+    let (env, client, admin) = setup_env();
+
+    let payment_a = make_id(&env, 82);
+    let payment_b = make_id(&env, 83);
+    let (root, proof) = two_leaf_tree(&env, &payment_a, &payment_b);
+    let batch_id = client.submit_merkle_root(&admin, &root);
+
+    let first = client.verify_settlement_proof(&batch_id, &payment_a, &proof);
+    let second = client.verify_settlement_proof(&batch_id, &payment_a, &proof);
+    assert_eq!(first, second);
+}

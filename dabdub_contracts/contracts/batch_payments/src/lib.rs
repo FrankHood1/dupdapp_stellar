@@ -3,8 +3,23 @@
 mod test;
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, vec, xdr::ToXdr, Address, Bytes, BytesN, Env, String, Vec,
+    contract, contractimpl, contracterror, contracttype, xdr::ToXdr, Address, Bytes, BytesN, Env,
+    String, Vec,
 };
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ContractError {
+    AlreadyInitialized = 1,
+    InvalidAmount = 2,
+    InvalidLimits = 3,
+    ContractNotInitialized = 4,
+    BatchEmpty = 5,
+    BatchTooLarge = 6,
+    PaymentAmountOutsideLimits = 7,
+    MemoEmpty = 8,
+    NotAdmin = 9,
+}
 
 const MAX_BATCH_SIZE: u32 = 20;
 
@@ -15,6 +30,7 @@ enum DataKey {
     MinAmount,
     MaxAmount,
     Counter,
+    Payment(BytesN<32>),
 }
 
 /// A single payment input in the batch.
@@ -47,15 +63,15 @@ pub struct BatchPaymentContract;
 #[contractimpl]
 impl BatchPaymentContract {
     /// One-time initialization for admin and amount limits.
-    pub fn init(env: Env, admin: Address, min_amount: i128, max_amount: i128) {
+    pub fn init(env: Env, admin: Address, min_amount: i128, max_amount: i128) -> Result<(), ContractError> {
         if env.storage().instance().has(&DataKey::Admin) {
-            panic!("contract already initialized");
+            return Err(ContractError::AlreadyInitialized);
         }
         if min_amount <= 0 {
-            panic!("min amount must be > 0");
+            return Err(ContractError::InvalidAmount);
         }
         if min_amount > max_amount {
-            panic!("min amount must be <= max amount");
+            return Err(ContractError::InvalidLimits);
         }
 
         admin.require_auth();
@@ -63,22 +79,23 @@ impl BatchPaymentContract {
         env.storage().instance().set(&DataKey::MinAmount, &min_amount);
         env.storage().instance().set(&DataKey::MaxAmount, &max_amount);
         env.storage().instance().set(&DataKey::Counter, &0u64);
+        Ok(())
     }
 
     /// Update payment amount limits. Admin-only.
-    pub fn set_limits(env: Env, min_amount: i128, max_amount: i128) {
+    pub fn set_limits(env: Env, min_amount: i128, max_amount: i128) -> Result<(), ContractError> {
         if min_amount <= 0 {
-            panic!("min amount must be > 0");
+            return Err(ContractError::InvalidAmount);
         }
         if min_amount > max_amount {
-            panic!("min amount must be <= max amount");
+            return Err(ContractError::InvalidLimits);
         }
 
         let admin: Address = env
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .unwrap_or_else(|| panic!("contract not initialized"));
+            .ok_or(ContractError::ContractNotInitialized)?;
         admin.require_auth();
 
         env.storage().instance().set(&DataKey::MinAmount, &min_amount);
@@ -87,6 +104,7 @@ impl BatchPaymentContract {
             (soroban_sdk::Symbol::new(&env, "LimitsUpdated"),),
             (min_amount, max_amount),
         );
+        Ok(())
     }
 
     /// Create up to 20 payments atomically in a single contract invocation.
@@ -100,61 +118,65 @@ impl BatchPaymentContract {
         env: Env,
         merchant: Address,
         payments: Vec<PaymentInput>,
-    ) -> Vec<BytesN<32>> {
+    ) -> Result<Vec<BytesN<32>>, ContractError> {
         merchant.require_auth();
 
         let min_amount: i128 = env
             .storage()
             .instance()
             .get(&DataKey::MinAmount)
-            .unwrap_or_else(|| panic!("contract not initialized"));
+            .ok_or(ContractError::ContractNotInitialized)?;
         let max_amount: i128 = env
             .storage()
             .instance()
             .get(&DataKey::MaxAmount)
-            .unwrap_or_else(|| panic!("contract not initialized"));
+            .ok_or(ContractError::ContractNotInitialized)?;
 
         let count = payments.len();
         if count == 0 {
-            panic!("batch must contain at least one payment");
+            return Err(ContractError::BatchEmpty);
         }
         if count > MAX_BATCH_SIZE {
-            panic!("batch exceeds maximum of 20 payments");
+            return Err(ContractError::BatchTooLarge);
         }
 
         // ── Validation pass (all items checked before any state write) ────────
         for i in 0..count {
             let item = payments.get(i).unwrap();
             if item.amount < min_amount || item.amount > max_amount {
-                panic!("payment amount outside configured limits");
+                return Err(ContractError::PaymentAmountOutsideLimits);
             }
             if item.memo.len() == 0 {
-                panic!("payment at index {}: memo must not be empty", i);
+                return Err(ContractError::MemoEmpty);
             }
         }
 
         // ── Creation pass ─────────────────────────────────────────────────────
-        let mut payment_ids: Vec<BytesN<32>> = vec![&env];
-        let counter: u64 = env.storage().instance().get(&DataKey::Counter).unwrap();
-
-        // Issue #1024: a monotonically increasing per-contract counter,
-        // hashed together with the merchant and payment contents, so two
-        // merchants (or the same merchant twice) landing in the same ledger
-        // can never derive the same payment ID.
+        // ID derivation scheme (issue #1201):
+        //   sha256(merchant_xdr || ledger_sequence || ledger_timestamp || counter)
+        // - merchant_xdr: prevents collisions across different merchants
+        // - ledger_sequence: bounds IDs to a ledger window
+        // - ledger_timestamp: extra entropy when sequence resets in test networks
+        // - counter: monotonically increasing, ensures no two items in the same
+        //   batch share an ID even when all other inputs are identical
+        let mut payment_ids: Vec<BytesN<32>> = Vec::new(&env);
         let mut counter: u64 = env
             .storage()
             .instance()
             .get(&DataKey::Counter)
             .unwrap_or(0u64);
+        let ledger_seq = env.ledger().sequence() as u64;
+        let ledger_ts = env.ledger().timestamp();
+        let merchant_xdr = merchant.clone().to_xdr(&env);
 
         for i in 0..count {
             let item = payments.get(i).unwrap();
 
             let new_counter = counter + i as u64;
-            let mut seed_bytes = soroban_sdk::vec![&env];
-            seed_bytes.extend_from_array(&(env.ledger().sequence() as u64).to_be_bytes());
-            seed_bytes.extend_from_array(&new_counter.to_be_bytes());
-            seed_bytes.extend_from_array(&merchant.clone().to_xdr(&env).to_bytes().as_ref());
+            let mut seed_bytes = merchant_xdr.clone();
+            seed_bytes.append(&Bytes::from_array(&env, &ledger_seq.to_be_bytes()));
+            seed_bytes.append(&Bytes::from_array(&env, &ledger_ts.to_be_bytes()));
+            seed_bytes.append(&Bytes::from_array(&env, &new_counter.to_be_bytes()));
 
             let id_bytes: BytesN<32> = env
                 .crypto()
@@ -173,7 +195,7 @@ impl BatchPaymentContract {
         let final_counter = counter + count as u64;
         env.storage().instance().set(&DataKey::Counter, &final_counter);
 
-        payment_ids
+        Ok(payment_ids)
     }
 
     /// Returns the on-chain record for a previously created payment, if any.
@@ -187,17 +209,17 @@ impl BatchPaymentContract {
     }
 
     /// Return the currently configured min and max payment amounts.
-    pub fn get_limits(env: Env) -> (i128, i128) {
+    pub fn get_limits(env: Env) -> Result<(i128, i128), ContractError> {
         let min_amount: i128 = env
             .storage()
             .instance()
             .get(&DataKey::MinAmount)
-            .unwrap_or_else(|| panic!("contract not initialized"));
+            .ok_or(ContractError::ContractNotInitialized)?;
         let max_amount: i128 = env
             .storage()
             .instance()
             .get(&DataKey::MaxAmount)
-            .unwrap_or_else(|| panic!("contract not initialized"));
-        (min_amount, max_amount)
+            .ok_or(ContractError::ContractNotInitialized)?;
+        Ok((min_amount, max_amount))
     }
 }
