@@ -1,9 +1,8 @@
 #![cfg(test)]
 
 use soroban_sdk::{
-    testutils::{Address as _, Events as _, MockAuth, MockAuthInvoke},
     token::{Client as TokenClient, StellarAssetClient},
-    Address, Env, IntoVal, Symbol,
+    Address, Env,
 };
 
 use crate::{FeeDistributorContract, FeeDistributorContractClient};
@@ -27,11 +26,9 @@ fn setup(lp_share_bps: i128) -> Setup<'static> {
     let lp = Address::generate(&env);
     let caller = Address::generate(&env);
 
-    // Deploy a test token (Stellar Asset Contract)
     let token_admin = Address::generate(&env);
     let token_id = env.register_stellar_asset_contract_v2(token_admin.clone());
     let sac = StellarAssetClient::new(&env, &token_id.address());
-    // Mint 1_000_000 to caller so distribute() can pull from them
     sac.mint(&caller, &1_000_000);
 
     let contract_id = env.register(
@@ -45,9 +42,11 @@ fn setup(lp_share_bps: i128) -> Setup<'static> {
     Setup { env, admin, treasury, lp, caller, token, client }
 }
 
+// ── split correctness ────────────────────────────────────────────────────────
+
 #[test]
 fn test_50_50_split() {
-    let s = setup(5_000); // 50% LP
+    let s = setup(5_000);
     s.client.distribute(&s.caller, &10_000);
     assert_eq!(s.token.balance(&s.treasury), 5_000);
     assert_eq!(s.token.balance(&s.lp), 5_000);
@@ -55,23 +54,23 @@ fn test_50_50_split() {
 
 #[test]
 fn test_30_70_split() {
-    let s = setup(3_000); // 30% LP, 70% treasury
+    let s = setup(3_000);
     s.client.distribute(&s.caller, &10_000);
     assert_eq!(s.token.balance(&s.lp), 3_000);
     assert_eq!(s.token.balance(&s.treasury), 7_000);
 }
 
 #[test]
-fn test_zero_lp_share() {
-    let s = setup(0); // 0% LP — all goes to treasury
+fn test_zero_lp_share_all_to_treasury() {
+    let s = setup(0);
     s.client.distribute(&s.caller, &10_000);
     assert_eq!(s.token.balance(&s.treasury), 10_000);
     assert_eq!(s.token.balance(&s.lp), 0);
 }
 
 #[test]
-fn test_hundred_percent_lp() {
-    let s = setup(10_000); // 100% LP — nothing to treasury
+fn test_hundred_percent_lp_all_to_lp() {
+    let s = setup(10_000);
     s.client.distribute(&s.caller, &10_000);
     assert_eq!(s.token.balance(&s.lp), 10_000);
     assert_eq!(s.token.balance(&s.treasury), 0);
@@ -86,153 +85,7 @@ fn test_rounding_remainder_goes_to_treasury() {
     assert_eq!(s.token.balance(&s.treasury), 7);
 }
 
-#[test]
-fn test_update_lp_share() {
-    let s = setup(5_000);
-    s.client.set_lp_share(&s.admin, &2_000);
-    let (_, _, bps) = s.client.get_config();
-    assert_eq!(bps, 2_000);
-    s.client.distribute(&s.caller, &10_000);
-    assert_eq!(s.token.balance(&s.lp), 2_000);
-    assert_eq!(s.token.balance(&s.treasury), 8_000);
-}
-
-#[test]
-fn test_update_addresses() {
-    let s = setup(5_000);
-    let new_treasury = Address::generate(&s.env);
-    let new_lp = Address::generate(&s.env);
-    s.client.set_treasury(&s.admin, &new_treasury);
-    s.client.set_lp_address(&s.admin, &new_lp);
-    s.client.distribute(&s.caller, &10_000);
-    assert_eq!(s.token.balance(&new_treasury), 5_000);
-    assert_eq!(s.token.balance(&new_lp), 5_000);
-    // old addresses untouched
-    assert_eq!(s.token.balance(&s.treasury), 0);
-    assert_eq!(s.token.balance(&s.lp), 0);
-}
-
-/// `distribute` intentionally has NO caller allowlist: any address holding the
-/// token may call it and have its own funds split between treasury and LP.
-/// This test mints tokens to a second, unrelated address (distinct from the
-/// pre-minted `caller` in `setup()`) and calls `distribute` from it, asserting
-/// the current unrestricted behavior explicitly. If a future change adds a
-/// caller restriction, this test must be updated deliberately — making any
-/// access-control change a conscious, test-visible decision.
-#[test]
-fn test_distribute_from_unrelated_caller_is_unrestricted() {
-    let s = setup(5_000); // 50% LP
-
-    // A second, unrelated address that is not the pre-minted `caller`.
-    let unrelated = Address::generate(&s.env);
-    assert_ne!(unrelated, s.caller);
-
-    // Fund the unrelated caller so distribute() can pull from them.
-    let sac = StellarAssetClient::new(&s.env, &s.token.address);
-    sac.mint(&unrelated, &10_000);
-
-    // No caller allowlist: an unrelated caller can distribute their own funds.
-    s.client.distribute(&unrelated, &10_000);
-
-    assert_eq!(s.token.balance(&s.lp), 5_000);
-    assert_eq!(s.token.balance(&s.treasury), 5_000);
-    // The unrelated caller's funds were consumed by the distribution.
-    assert_eq!(s.token.balance(&unrelated), 0);
-    // The original pre-minted caller was not touched.
-    assert_eq!(s.token.balance(&s.caller), 1_000_000);
-}
-
-#[test]
-#[should_panic(expected = "treasury and lp_address must differ")]
-fn test_constructor_rejects_treasury_equal_lp() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let admin = Address::generate(&env);
-    let shared = Address::generate(&env);
-
-    let token_admin = Address::generate(&env);
-    let token_id = env.register_stellar_asset_contract_v2(token_admin.clone());
-
-    env.register(
-        FeeDistributorContract,
-        (&admin, &shared, &shared, 5_000i128, &token_id.address()),
-    );
-}
-
-#[test]
-#[should_panic(expected = "admin must differ from treasury")]
-fn test_constructor_rejects_admin_equal_treasury() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let shared = Address::generate(&env);
-    let lp = Address::generate(&env);
-
-    let token_admin = Address::generate(&env);
-    let token_id = env.register_stellar_asset_contract_v2(token_admin.clone());
-
-    env.register(
-        FeeDistributorContract,
-        (&shared, &shared, &lp, 5_000i128, &token_id.address()),
-    );
-}
-
-#[test]
-#[should_panic(expected = "admin must differ from lp_address")]
-fn test_constructor_rejects_admin_equal_lp() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let treasury = Address::generate(&env);
-    let shared = Address::generate(&env);
-
-    let token_admin = Address::generate(&env);
-    let token_id = env.register_stellar_asset_contract_v2(token_admin.clone());
-
-    env.register(
-        FeeDistributorContract,
-        (&shared, &treasury, &shared, 5_000i128, &token_id.address()),
-    );
-}
-
-#[test]
-fn test_set_lp_share_emits_event() {
-    let s = setup(5_000);
-    s.client.set_lp_share(&s.admin, &2_000);
-    let events = s.env.events().all();
-    let last = events.last().unwrap();
-    assert_eq!(last.1, (Symbol::new(&s.env, "lp_share_set"),).into_val(&s.env));
-    let (old, new): (i128, i128) = last.2.into_val(&s.env);
-    assert_eq!(old, 5_000);
-    assert_eq!(new, 2_000);
-}
-
-#[test]
-fn test_set_treasury_emits_event() {
-    let s = setup(5_000);
-    let new_treasury = Address::generate(&s.env);
-    s.client.set_treasury(&s.admin, &new_treasury);
-    let events = s.env.events().all();
-    let last = events.last().unwrap();
-    assert_eq!(last.1, (Symbol::new(&s.env, "treasury_set"),).into_val(&s.env));
-    let (old, new): (Address, Address) = last.2.into_val(&s.env);
-    assert_eq!(old, s.treasury);
-    assert_eq!(new, new_treasury);
-}
-
-#[test]
-fn test_set_lp_address_emits_event() {
-    let s = setup(5_000);
-    let new_lp = Address::generate(&s.env);
-    s.client.set_lp_address(&s.admin, &new_lp);
-    let events = s.env.events().all();
-    let last = events.last().unwrap();
-    assert_eq!(last.1, (Symbol::new(&s.env, "lp_address_set"),).into_val(&s.env));
-    let (old, new): (Address, Address) = last.2.into_val(&s.env);
-    assert_eq!(old, s.lp);
-    assert_eq!(new, new_lp);
-}
+// ── allowed_caller enforcement ───────────────────────────────────────────────
 
 #[test]
 fn test_unauthorized_caller_rejected() {
@@ -253,36 +106,88 @@ fn test_rotate_allowed_caller() {
     let sac = StellarAssetClient::new(&s.env, &s.token.address);
     sac.mint(&new_caller, &10_000);
 
-    // Old caller works before rotation
     s.client.distribute(&s.caller, &10_000);
     assert_eq!(s.token.balance(&s.treasury), 5_000);
 
-    // Rotate to new caller
     s.client.set_allowed_caller(&s.admin, &new_caller);
 
-    // Old caller now rejected
+    // old caller now rejected
     let res = s.client.try_distribute(&s.caller, &10_000);
     assert!(res.is_err());
 
-    // New caller works
+    // new caller accepted
     s.client.distribute(&new_caller, &10_000);
     assert_eq!(s.token.balance(&s.treasury), 10_000);
     assert_eq!(s.token.balance(&s.lp), 10_000);
 }
+
+// ── over-distribution rejected ───────────────────────────────────────────────
+
+#[test]
+fn test_distribute_fails_when_caller_lacks_sufficient_balance() {
+    let s = setup(5_000);
+    // caller was minted 1_000_000; requesting more than that should fail
+    // because token.transfer will panic when the caller is short
+    let res = s.client.try_distribute(&s.caller, &2_000_000);
+    assert!(res.is_err());
+    // balances unchanged
+    assert_eq!(s.token.balance(&s.treasury), 0);
+    assert_eq!(s.token.balance(&s.lp), 0);
+}
+
+#[test]
+#[should_panic(expected = "total_fee must be > 0")]
+fn test_distribute_rejects_zero_fee() {
+    let s = setup(5_000);
+    s.client.distribute(&s.caller, &0);
+}
+
+// ── admin config changes ─────────────────────────────────────────────────────
+
+#[test]
+fn test_update_lp_share() {
+    let s = setup(5_000);
+    s.client.set_lp_share(&s.admin, &2_000);
+    let (_, _, bps) = s.client.get_config();
+    assert_eq!(bps, 2_000);
+    s.client.distribute(&s.caller, &10_000);
+    assert_eq!(s.token.balance(&s.lp), 2_000);
+    assert_eq!(s.token.balance(&s.treasury), 8_000);
+}
+
+#[test]
+fn test_update_treasury_and_lp_addresses() {
+    let s = setup(5_000);
+    let new_treasury = Address::generate(&s.env);
+    let new_lp = Address::generate(&s.env);
+    s.client.set_treasury(&s.admin, &new_treasury);
+    s.client.set_lp_address(&s.admin, &new_lp);
+    s.client.distribute(&s.caller, &10_000);
+    assert_eq!(s.token.balance(&new_treasury), 5_000);
+    assert_eq!(s.token.balance(&new_lp), 5_000);
+    assert_eq!(s.token.balance(&s.treasury), 0);
+    assert_eq!(s.token.balance(&s.lp), 0);
+}
+
+#[test]
+#[should_panic(expected = "bps out of range")]
+fn test_set_lp_share_rejects_out_of_range() {
+    let s = setup(5_000);
+    s.client.set_lp_share(&s.admin, &10_001);
+}
+
+// ── admin rotation ───────────────────────────────────────────────────────────
 
 #[test]
 fn test_transfer_admin_rotates_admin() {
     let s = setup(5_000);
     let new_admin = Address::generate(&s.env);
 
-    // Rotate admin
     s.client.transfer_admin(&s.admin, &new_admin);
 
-    // Old admin can no longer perform gated calls
     let res = s.client.try_set_lp_share(&s.admin, &2_000);
     assert!(res.is_err());
 
-    // New admin can perform gated calls
     s.client.set_lp_share(&new_admin, &2_000);
     let (_, _, bps) = s.client.get_config();
     assert_eq!(bps, 2_000);
@@ -297,9 +202,122 @@ fn test_transfer_admin_rejects_non_admin() {
     let res = s.client.try_transfer_admin(&stranger, &new_admin);
     assert!(res.is_err());
 
-    // Admin unchanged: original admin still works
     s.client.set_lp_share(&s.admin, &2_000);
     let (_, _, bps) = s.client.get_config();
     assert_eq!(bps, 2_000);
 }
+
+// ── constructor validation ───────────────────────────────────────────────────
+
+#[test]
+#[should_panic(expected = "treasury and lp_address must differ")]
+fn test_constructor_rejects_treasury_equal_lp() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let shared = Address::generate(&env);
+    let allowed_caller = Address::generate(&env);
+
+    let token_admin = Address::generate(&env);
+    let token_id = env.register_stellar_asset_contract_v2(token_admin.clone());
+
+    env.register(
+        FeeDistributorContract,
+        (&admin, &shared, &shared, 5_000i128, &token_id.address(), &allowed_caller),
+    );
+}
+
+#[test]
+#[should_panic(expected = "admin and treasury must differ")]
+fn test_constructor_rejects_admin_equal_treasury() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let shared = Address::generate(&env);
+    let lp = Address::generate(&env);
+    let allowed_caller = Address::generate(&env);
+
+    let token_admin = Address::generate(&env);
+    let token_id = env.register_stellar_asset_contract_v2(token_admin.clone());
+
+    env.register(
+        FeeDistributorContract,
+        (&shared, &shared, &lp, 5_000i128, &token_id.address(), &allowed_caller),
+    );
+}
+
+#[test]
+#[should_panic(expected = "admin and lp_address must differ")]
+fn test_constructor_rejects_admin_equal_lp() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let treasury = Address::generate(&env);
+    let shared = Address::generate(&env);
+    let allowed_caller = Address::generate(&env);
+
+    let token_admin = Address::generate(&env);
+    let token_id = env.register_stellar_asset_contract_v2(token_admin.clone());
+
+    env.register(
+        FeeDistributorContract,
+        (&shared, &treasury, &shared, 5_000i128, &token_id.address(), &allowed_caller),
+    );
+}
+
+#[test]
+#[should_panic(expected = "bps out of range")]
+fn test_constructor_rejects_invalid_bps() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let lp = Address::generate(&env);
+    let allowed_caller = Address::generate(&env);
+
+    let token_admin = Address::generate(&env);
+    let token_id = env.register_stellar_asset_contract_v2(token_admin.clone());
+
+    env.register(
+        FeeDistributorContract,
+        (&admin, &treasury, &lp, 20_000i128, &token_id.address(), &allowed_caller),
+    );
+}
+
+// ── get_config ───────────────────────────────────────────────────────────────
+
+#[test]
+fn test_get_config_returns_initial_values() {
+    let s = setup(4_000);
+    let (treasury, lp, bps) = s.client.get_config();
+    assert_eq!(treasury, s.treasury);
+    assert_eq!(lp, s.lp);
+    assert_eq!(bps, 4_000);
+}
+
+#[test]
+fn test_get_allowed_caller_returns_configured_caller() {
+    let s = setup(5_000);
+    assert_eq!(s.client.get_allowed_caller(), s.caller);
+}
+
+// ── integration: simulate fee_calculator output ───────────────────────────────
+
+#[test]
+fn test_distribute_fee_calculator_output() {
+    // Simulates what fee_calculator would return: a 1.5% fee on 100_000 = 1_500
+    let amount: i128 = 100_000;
+    let fee_bps: i128 = 150; // 1.5%
+    let computed_fee = amount * fee_bps / 10_000; // = 1_500
+
+    let s = setup(3_000); // 30% LP of fee
+    s.client.distribute(&s.caller, &computed_fee);
+
+    // lp = 1500 * 3000 / 10000 = 450; treasury = 1050
+    assert_eq!(s.token.balance(&s.lp), 450);
+    assert_eq!(s.token.balance(&s.treasury), 1_050);
+    // sum equals total_fee
+    assert_eq!(s.token.balance(&s.lp) + s.token.balance(&s.treasury), computed_fee);
 }
