@@ -1,11 +1,14 @@
 #![cfg(test)]
 
 use soroban_sdk::{
+    testutils::{Address as _, Events as _, Ledger as _},
     token::{Client as TokenClient, StellarAssetClient},
-    Address, Env,
+    vec, Address, Env,
 };
 
-use crate::{FeeDistributorContract, FeeDistributorContractClient};
+use crate::{
+    FeeDistributorContract, FeeDistributorContractClient, FeeRecipient, PendingRecipientUpdate,
+};
 
 struct Setup<'a> {
     env: Env,
@@ -13,311 +16,286 @@ struct Setup<'a> {
     treasury: Address,
     lp: Address,
     caller: Address,
+    contract_id: Address,
     token: TokenClient<'a>,
     client: FeeDistributorContractClient<'a>,
 }
 
-fn setup(lp_share_bps: i128) -> Setup<'static> {
+fn setup(shares: &[u32]) -> Setup<'static> {
     let env = Env::default();
     env.mock_all_auths();
 
     let admin = Address::generate(&env);
-    let treasury = Address::generate(&env);
-    let lp = Address::generate(&env);
+    let mut recipients = soroban_sdk::Vec::new(&env);
+    for share_bps in shares {
+        recipients.push_back(FeeRecipient {
+            address: Address::generate(&env),
+            share_bps: *share_bps,
+        });
+    }
+    let treasury = recipients.get(0).unwrap().address;
+    let lp = recipients.get(1).unwrap().address;
     let caller = Address::generate(&env);
-
     let token_admin = Address::generate(&env);
-    let token_id = env.register_stellar_asset_contract_v2(token_admin.clone());
-    let sac = StellarAssetClient::new(&env, &token_id.address());
-    sac.mint(&caller, &1_000_000);
+    let token_id = env.register_stellar_asset_contract_v2(token_admin);
+    let token = TokenClient::new(&env, &token_id.address());
+    StellarAssetClient::new(&env, &token_id.address()).mint(&caller, &1_000_000);
 
     let contract_id = env.register(
         FeeDistributorContract,
-        (&admin, &treasury, &lp, lp_share_bps, &token_id.address(), &caller),
+        (&admin, recipients, &token_id.address(), &caller),
     );
-
     let client = FeeDistributorContractClient::new(&env, &contract_id);
-    let token = TokenClient::new(&env, &token_id.address());
 
-    Setup { env, admin, treasury, lp, caller, token, client }
+    Setup {
+        env,
+        admin,
+        treasury,
+        lp,
+        caller,
+        contract_id,
+        token,
+        client,
+    }
 }
 
-// ── split correctness ────────────────────────────────────────────────────────
+fn default_setup() -> Setup<'static> {
+    setup(&[5_000, 5_000])
+}
+
+fn schedule_update(
+    setup: &Setup<'_>,
+    recipients: soroban_sdk::Vec<FeeRecipient>,
+) -> PendingRecipientUpdate {
+    setup.client.schedule_recipients(&setup.admin, &recipients);
+    setup.client.get_pending_recipients().unwrap()
+}
 
 #[test]
-fn test_50_50_split() {
-    let s = setup(5_000);
+fn test_distributes_to_each_recipient() {
+    let s = default_setup();
     s.client.distribute(&s.caller, &10_000);
     assert_eq!(s.token.balance(&s.treasury), 5_000);
     assert_eq!(s.token.balance(&s.lp), 5_000);
+    assert_eq!(s.token.balance(&s.contract_id), 0);
 }
 
 #[test]
-fn test_30_70_split() {
-    let s = setup(3_000);
-    s.client.distribute(&s.caller, &10_000);
-    assert_eq!(s.token.balance(&s.lp), 3_000);
-    assert_eq!(s.token.balance(&s.treasury), 7_000);
-}
+fn test_three_recipient_split_conserves_rounding_remainder() {
+    let s = setup(&[3_333, 3_333, 3_334]);
+    let recipients = s.client.get_recipients();
+    let first = recipients.get(0).unwrap().address;
+    let second = recipients.get(1).unwrap().address;
+    let final_recipient = recipients.get(2).unwrap().address;
 
-#[test]
-fn test_zero_lp_share_all_to_treasury() {
-    let s = setup(0);
-    s.client.distribute(&s.caller, &10_000);
-    assert_eq!(s.token.balance(&s.treasury), 10_000);
-    assert_eq!(s.token.balance(&s.lp), 0);
-}
-
-#[test]
-fn test_hundred_percent_lp_all_to_lp() {
-    let s = setup(10_000);
-    s.client.distribute(&s.caller, &10_000);
-    assert_eq!(s.token.balance(&s.lp), 10_000);
-    assert_eq!(s.token.balance(&s.treasury), 0);
-}
-
-#[test]
-fn test_rounding_remainder_goes_to_treasury() {
-    let s = setup(3_333); // 33.33% LP
     s.client.distribute(&s.caller, &10);
-    // lp = 10 * 3333 / 10000 = 3 (truncated), treasury = 7
-    assert_eq!(s.token.balance(&s.lp), 3);
-    assert_eq!(s.token.balance(&s.treasury), 7);
-}
 
-// ── allowed_caller enforcement ───────────────────────────────────────────────
-
-#[test]
-fn test_unauthorized_caller_rejected() {
-    let s = setup(5_000);
-    let stranger = Address::generate(&s.env);
-    let sac = StellarAssetClient::new(&s.env, &s.token.address);
-    sac.mint(&stranger, &10_000);
-    let res = s.client.try_distribute(&stranger, &10_000);
-    assert!(res.is_err());
-    assert_eq!(s.token.balance(&s.treasury), 0);
-    assert_eq!(s.token.balance(&s.lp), 0);
+    assert_eq!(s.token.balance(&first), 3);
+    assert_eq!(s.token.balance(&second), 3);
+    assert_eq!(s.token.balance(&final_recipient), 4);
+    assert_eq!(s.token.balance(&s.contract_id), 0);
 }
 
 #[test]
-fn test_rotate_allowed_caller() {
-    let s = setup(5_000);
-    let new_caller = Address::generate(&s.env);
-    let sac = StellarAssetClient::new(&s.env, &s.token.address);
-    sac.mint(&new_caller, &10_000);
-
-    s.client.distribute(&s.caller, &10_000);
-    assert_eq!(s.token.balance(&s.treasury), 5_000);
-
-    s.client.set_allowed_caller(&s.admin, &new_caller);
-
-    // old caller now rejected
-    let res = s.client.try_distribute(&s.caller, &10_000);
-    assert!(res.is_err());
-
-    // new caller accepted
-    s.client.distribute(&new_caller, &10_000);
-    assert_eq!(s.token.balance(&s.treasury), 10_000);
-    assert_eq!(s.token.balance(&s.lp), 10_000);
-}
-
-// ── over-distribution rejected ───────────────────────────────────────────────
-
-#[test]
-fn test_distribute_fails_when_caller_lacks_sufficient_balance() {
-    let s = setup(5_000);
-    // caller was minted 1_000_000; requesting more than that should fail
-    // because token.transfer will panic when the caller is short
-    let res = s.client.try_distribute(&s.caller, &2_000_000);
-    assert!(res.is_err());
-    // balances unchanged
-    assert_eq!(s.token.balance(&s.treasury), 0);
-    assert_eq!(s.token.balance(&s.lp), 0);
-}
-
-#[test]
-#[should_panic(expected = "total_fee must be > 0")]
-fn test_distribute_rejects_zero_fee() {
-    let s = setup(5_000);
-    s.client.distribute(&s.caller, &0);
-}
-
-// ── admin config changes ─────────────────────────────────────────────────────
-
-#[test]
-fn test_update_lp_share() {
-    let s = setup(5_000);
-    s.client.set_lp_share(&s.admin, &2_000);
-    let (_, _, bps) = s.client.get_config();
-    assert_eq!(bps, 2_000);
-    s.client.distribute(&s.caller, &10_000);
-    assert_eq!(s.token.balance(&s.lp), 2_000);
-    assert_eq!(s.token.balance(&s.treasury), 8_000);
-}
-
-#[test]
-fn test_update_treasury_and_lp_addresses() {
-    let s = setup(5_000);
-    let new_treasury = Address::generate(&s.env);
-    let new_lp = Address::generate(&s.env);
-    s.client.set_treasury(&s.admin, &new_treasury);
-    s.client.set_lp_address(&s.admin, &new_lp);
-    s.client.distribute(&s.caller, &10_000);
-    assert_eq!(s.token.balance(&new_treasury), 5_000);
-    assert_eq!(s.token.balance(&new_lp), 5_000);
-    assert_eq!(s.token.balance(&s.treasury), 0);
-    assert_eq!(s.token.balance(&s.lp), 0);
-}
-
-#[test]
-#[should_panic(expected = "bps out of range")]
-fn test_set_lp_share_rejects_out_of_range() {
-    let s = setup(5_000);
-    s.client.set_lp_share(&s.admin, &10_001);
-}
-
-// ── admin rotation ───────────────────────────────────────────────────────────
-
-#[test]
-fn test_transfer_admin_rotates_admin() {
-    let s = setup(5_000);
-    let new_admin = Address::generate(&s.env);
-
-    s.client.transfer_admin(&s.admin, &new_admin);
-
-    let res = s.client.try_set_lp_share(&s.admin, &2_000);
-    assert!(res.is_err());
-
-    s.client.set_lp_share(&new_admin, &2_000);
-    let (_, _, bps) = s.client.get_config();
-    assert_eq!(bps, 2_000);
-}
-
-#[test]
-fn test_transfer_admin_rejects_non_admin() {
-    let s = setup(5_000);
-    let stranger = Address::generate(&s.env);
-    let new_admin = Address::generate(&s.env);
-
-    let res = s.client.try_transfer_admin(&stranger, &new_admin);
-    assert!(res.is_err());
-
-    s.client.set_lp_share(&s.admin, &2_000);
-    let (_, _, bps) = s.client.get_config();
-    assert_eq!(bps, 2_000);
+fn test_single_recipient_receives_full_amount() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let recipient = Address::generate(&env);
+    let recipients = vec![
+        &env,
+        FeeRecipient {
+            address: recipient.clone(),
+            share_bps: 10_000,
+        },
+    ];
+    // The setup's convenience fields need two recipients, so register directly.
+    let admin = Address::generate(&env);
+    let caller = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token_id = env.register_stellar_asset_contract_v2(token_admin);
+    let token = TokenClient::new(&env, &token_id.address());
+    StellarAssetClient::new(&env, &token_id.address()).mint(&caller, &100);
+    let contract_id = env.register(
+        FeeDistributorContract,
+        (&admin, recipients, &token_id.address(), &caller),
+    );
+    FeeDistributorContractClient::new(&env, &contract_id).distribute(&caller, &10);
+    assert_eq!(token.balance(&recipient), 10);
+    assert_eq!(token.balance(&contract_id), 0);
 }
 
 // ── constructor validation ───────────────────────────────────────────────────
 
 #[test]
-#[should_panic(expected = "treasury and lp_address must differ")]
-fn test_constructor_rejects_treasury_equal_lp() {
+#[should_panic(expected = "recipient shares must total 10000 bps")]
+fn test_constructor_rejects_invalid_share_total() {
     let env = Env::default();
-    env.mock_all_auths();
-
+    let recipients = vec![
+        &env,
+        FeeRecipient {
+            address: Address::generate(&env),
+            share_bps: 4_000,
+        },
+    ];
     let admin = Address::generate(&env);
-    let shared = Address::generate(&env);
-    let allowed_caller = Address::generate(&env);
-
     let token_admin = Address::generate(&env);
-    let token_id = env.register_stellar_asset_contract_v2(token_admin.clone());
-
+    let token_id = env.register_stellar_asset_contract_v2(token_admin);
+    let caller = Address::generate(&env);
     env.register(
         FeeDistributorContract,
-        (&admin, &shared, &shared, 5_000i128, &token_id.address(), &allowed_caller),
+        (&admin, recipients, &token_id.address(), &caller),
     );
 }
 
 #[test]
-#[should_panic(expected = "admin and treasury must differ")]
-fn test_constructor_rejects_admin_equal_treasury() {
+#[should_panic(expected = "recipient count must be between 1 and 10")]
+fn test_constructor_rejects_empty_recipient_list() {
     let env = Env::default();
-    env.mock_all_auths();
-
-    let shared = Address::generate(&env);
-    let lp = Address::generate(&env);
-    let allowed_caller = Address::generate(&env);
-
-    let token_admin = Address::generate(&env);
-    let token_id = env.register_stellar_asset_contract_v2(token_admin.clone());
-
-    env.register(
-        FeeDistributorContract,
-        (&shared, &shared, &lp, 5_000i128, &token_id.address(), &allowed_caller),
-    );
-}
-
-#[test]
-#[should_panic(expected = "admin and lp_address must differ")]
-fn test_constructor_rejects_admin_equal_lp() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let treasury = Address::generate(&env);
-    let shared = Address::generate(&env);
-    let allowed_caller = Address::generate(&env);
-
-    let token_admin = Address::generate(&env);
-    let token_id = env.register_stellar_asset_contract_v2(token_admin.clone());
-
-    env.register(
-        FeeDistributorContract,
-        (&shared, &treasury, &shared, 5_000i128, &token_id.address(), &allowed_caller),
-    );
-}
-
-#[test]
-#[should_panic(expected = "bps out of range")]
-fn test_constructor_rejects_invalid_bps() {
-    let env = Env::default();
-    env.mock_all_auths();
-
+    let recipients: soroban_sdk::Vec<FeeRecipient> = soroban_sdk::Vec::new(&env);
     let admin = Address::generate(&env);
-    let treasury = Address::generate(&env);
-    let lp = Address::generate(&env);
-    let allowed_caller = Address::generate(&env);
-
     let token_admin = Address::generate(&env);
-    let token_id = env.register_stellar_asset_contract_v2(token_admin.clone());
-
+    let token_id = env.register_stellar_asset_contract_v2(token_admin);
+    let caller = Address::generate(&env);
     env.register(
         FeeDistributorContract,
-        (&admin, &treasury, &lp, 20_000i128, &token_id.address(), &allowed_caller),
+        (&admin, recipients, &token_id.address(), &caller),
     );
 }
 
-// ── get_config ───────────────────────────────────────────────────────────────
-
 #[test]
-fn test_get_config_returns_initial_values() {
-    let s = setup(4_000);
-    let (treasury, lp, bps) = s.client.get_config();
-    assert_eq!(treasury, s.treasury);
-    assert_eq!(lp, s.lp);
-    assert_eq!(bps, 4_000);
+#[should_panic(expected = "recipient addresses must be unique")]
+fn test_constructor_rejects_duplicate_addresses() {
+    let env = Env::default();
+    let address = Address::generate(&env);
+    let recipients = vec![
+        &env,
+        FeeRecipient {
+            address: address.clone(),
+            share_bps: 5_000,
+        },
+        FeeRecipient {
+            address,
+            share_bps: 5_000,
+        },
+    ];
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token_id = env.register_stellar_asset_contract_v2(token_admin);
+    let caller = Address::generate(&env);
+    env.register(
+        FeeDistributorContract,
+        (&admin, recipients, &token_id.address(), &caller),
+    );
 }
 
 #[test]
-fn test_get_allowed_caller_returns_configured_caller() {
-    let s = setup(5_000);
-    assert_eq!(s.client.get_allowed_caller(), s.caller);
+fn test_recipient_update_waits_for_timelock() {
+    let s = default_setup();
+    let replacement = Address::generate(&s.env);
+    let pending = schedule_update(
+        &s,
+        vec![
+            &s.env,
+            FeeRecipient {
+                address: replacement.clone(),
+                share_bps: 10_000,
+            },
+        ],
+    );
+
+    assert_eq!(
+        pending.execute_after,
+        s.env.ledger().sequence() + crate::RECIPIENT_UPDATE_DELAY_LEDGERS
+    );
+    assert!(s.client.try_apply_recipients(&s.admin).is_err());
+    assert_eq!(
+        s.client.get_recipients().get(0).unwrap().address,
+        s.treasury
+    );
+
+    s.env.ledger().set_sequence_number(pending.execute_after);
+    s.client.apply_recipients(&s.admin);
+    let active = s.client.get_recipients();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active.get(0).unwrap().address, replacement);
+    assert!(s.client.get_pending_recipients().is_none());
 }
 
-// ── integration: simulate fee_calculator output ───────────────────────────────
+#[test]
+fn test_non_admin_cannot_schedule_or_apply_recipient_update() {
+    let s = default_setup();
+    let stranger = Address::generate(&s.env);
+    let replacements = vec![
+        &s.env,
+        FeeRecipient {
+            address: Address::generate(&s.env),
+            share_bps: 10_000,
+        },
+    ];
+    assert!(s
+        .client
+        .try_schedule_recipients(&stranger, &replacements)
+        .is_err());
+    assert!(s.client.try_apply_recipients(&stranger).is_err());
+}
 
 #[test]
-fn test_distribute_fee_calculator_output() {
-    // Simulates what fee_calculator would return: a 1.5% fee on 100_000 = 1_500
-    let amount: i128 = 100_000;
-    let fee_bps: i128 = 150; // 1.5%
-    let computed_fee = amount * fee_bps / 10_000; // = 1_500
+fn test_admin_can_cancel_pending_update() {
+    let s = default_setup();
+    let replacement = Address::generate(&s.env);
+    schedule_update(
+        &s,
+        vec![
+            &s.env,
+            FeeRecipient {
+                address: replacement,
+                share_bps: 10_000,
+            },
+        ],
+    );
 
-    let s = setup(3_000); // 30% LP of fee
-    s.client.distribute(&s.caller, &computed_fee);
+    s.client.cancel_recipients_update(&s.admin);
+    assert!(s.client.get_pending_recipients().is_none());
+    assert_eq!(s.client.get_recipients().len(), 2);
+}
 
-    // lp = 1500 * 3000 / 10000 = 450; treasury = 1050
-    assert_eq!(s.token.balance(&s.lp), 450);
-    assert_eq!(s.token.balance(&s.treasury), 1_050);
-    // sum equals total_fee
-    assert_eq!(s.token.balance(&s.lp) + s.token.balance(&s.treasury), computed_fee);
+#[test]
+fn test_distribution_emits_payouts_event() {
+    let s = default_setup();
+    let event_count = s.env.events().all().len();
+    s.client.distribute(&s.caller, &10_000);
+    assert!(s.env.events().all().len() > event_count);
+}
+
+#[test]
+fn test_allowed_caller_rotation_and_admin_rotation() {
+    let s = default_setup();
+    let new_caller = Address::generate(&s.env);
+    let sac = StellarAssetClient::new(&s.env, &s.token.address);
+    sac.mint(&new_caller, &10_000);
+    s.client.set_allowed_caller(&s.admin, &new_caller);
+    assert!(s.client.try_distribute(&s.caller, &10_000).is_err());
+    s.client.distribute(&new_caller, &10_000);
+
+    let new_admin = Address::generate(&s.env);
+    s.client.transfer_admin(&s.admin, &new_admin);
+    let updated = vec![
+        &s.env,
+        FeeRecipient {
+            address: Address::generate(&s.env),
+            share_bps: 10_000,
+        },
+    ];
+    assert!(s
+        .client
+        .try_schedule_recipients(&s.admin, &updated)
+        .is_err());
+    s.client.schedule_recipients(&new_admin, &updated);
+}
+
+#[test]
+#[should_panic(expected = "total_amount must be > 0")]
+fn test_zero_amount_rejected() {
+    let s = default_setup();
+    s.client.distribute(&s.caller, &0);
 }

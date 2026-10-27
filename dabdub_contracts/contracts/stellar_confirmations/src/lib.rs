@@ -247,13 +247,11 @@ impl StellarConfirmationsContract {
     pub fn set_payment_escrow_contract(env: Env, caller: Address, contract: Option<Address>) {
         caller.require_auth();
         Self::require_admin(&env, &caller);
-        match contract {
-            Some(addr) => env
-                .storage()
-                .instance()
-                .set(&DataKey::PaymentEscrowContract, &addr),
-            None => env.storage().instance().remove(&DataKey::PaymentEscrowContract),
-        }
+        env.storage().instance().set(&DataKey::PaymentEscrowContract, &payment_escrow);
+        env.events().publish(
+            ("STELLAR_CONFS", "escrow_contract_updated"),
+            (Some(payment_escrow),),
+        );
     }
 
     pub fn get_payment_escrow_contract(env: Env) -> Option<Address> {
@@ -265,11 +263,38 @@ impl StellarConfirmationsContract {
         caller.require_auth();
         Self::require_admin(&env, &caller);
         assert!(count > 0, "confirmation_count must be > 0");
+        let previous: u32 = env.storage().instance().get(&DataKey::ConfirmationCount).unwrap();
         env.storage().instance().set(&DataKey::ConfirmationCount, &count);
+        env.events().publish(
+            ("STELLAR_CONFS", "confirmation_count_updated"),
+            (previous, count),
+        );
     }
 
     pub fn get_confirmation_count(env: Env) -> u32 {
         env.storage().instance().get(&DataKey::ConfirmationCount).unwrap()
+    }
+
+    /// Admin: link the payment_escrow contract used to cross-check
+    /// `amount`/`merchant` in `confirm_payment`. Pass `None` to unlink.
+    pub fn set_payment_escrow_contract(env: Env, caller: Address, contract: Option<Address>) {
+        caller.require_auth();
+        Self::require_admin(&env, &caller);
+        match &contract {
+            Some(addr) => env
+                .storage()
+                .instance()
+                .set(&DataKey::PaymentEscrowContract, addr),
+            None => env.storage().instance().remove(&DataKey::PaymentEscrowContract),
+        }
+        env.events().publish(
+            ("STELLAR_CONFS", "escrow_contract_updated"),
+            (contract,),
+        );
+    }
+
+    pub fn get_payment_escrow_contract(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::PaymentEscrowContract)
     }
 
     pub fn get_payment_confirmations(env: Env, payment_id: BytesN<32>) -> u32 {

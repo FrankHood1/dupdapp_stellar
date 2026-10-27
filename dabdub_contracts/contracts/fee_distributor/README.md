@@ -1,80 +1,56 @@
-# fee_distributor
+# Fee Distributor Contract
 
-Soroban smart contract that atomically splits a collected fee between two recipients — a **treasury** (platform operational wallet) and a **liquidity provider (LP)** — in a single token transfer.
-
-## Purpose
-
-When a payment is settled via `fee_calculator`, the computed fee must be distributed to the platform's revenue recipients. `fee_distributor` enforces this split atomically: both outbound transfers happen in the same Soroban transaction, so partial distributions cannot occur.
+`fee_distributor` pulls a positive USDC fee from its configured caller and
+distributes the full amount among an on-chain list of fee recipients.
 
 ## Recipients
 
-| Recipient | Role | Share |
-|---|---|---|
-| Treasury | Platform operational wallet — funds infrastructure, development, and operations | `(1 - lp_share_bps / 10000)` of total fee |
-| LP Address | Liquidity provider — compensates liquidity provisioned via the AMM | `lp_share_bps / 10000` of total fee |
-
-The split ratio is stored as **basis points** (`lp_share_bps`). 5 000 bps = 50% LP / 50% treasury.
-
-### Rounding policy
-
-`lp_amount` truncates via integer division (`total_fee * lp_share_bps / 10_000`). Any remainder is allocated to the treasury. This is an intentional policy choice favoring the treasury — do not change the arithmetic order without an explicit decision.
-
-## Interface
+The constructor accepts `Vec<FeeRecipient>`:
 
 ```rust
-// Deploy
-fn __constructor(
-    admin: Address,
-    treasury: Address,
-    lp_address: Address,
-    lp_share_bps: i128,   // 0 – 10_000 inclusive
-    usdc_token: Address,
-    allowed_caller: Address,
-) -> ();
-
-// Distribute total_fee (in USDC stroops) between treasury and LP.
-// Only `allowed_caller` may invoke this.
-// The caller must hold sufficient USDC balance.
-fn distribute(caller: Address, total_fee: i128) -> ();
-
-// Admin-only setters
-fn set_lp_share(caller: Address, bps: i128) -> ();
-fn set_treasury(caller: Address, treasury: Address) -> ();
-fn set_lp_address(caller: Address, lp_address: Address) -> ();
-fn set_allowed_caller(caller: Address, allowed_caller: Address) -> ();
-fn transfer_admin(caller: Address, new_admin: Address) -> ();
-
-// Read-only
-fn get_config() -> (Address, Address, i128);  // (treasury, lp_address, lp_share_bps)
-fn get_allowed_caller() -> Address;
+pub struct FeeRecipient {
+    pub address: Address,
+    pub share_bps: u32,
+}
 ```
 
-## Callers
+The list must contain 1–10 unique addresses, each with a nonzero share, and
+shares must total exactly 10,000 basis points. Each non-final recipient gets
+the integer-truncated proportional amount; the final recipient receives the
+remainder so no funds remain in the distributor due to rounding. Distribution
+is atomic: any failed token transfer reverts the entire invocation.
 
-Only the `allowed_caller` address (typically `payment_escrow` or a settlement orchestrator) may call `distribute`. The admin rotates this via `set_allowed_caller`.
+Only the configured `allowed_caller` can distribute fees. The caller must
+authorize the call and have sufficient token balance; `distribute` transfers
+funds from that caller, not from a pooled account.
 
-## Events
+## Timelocked recipient changes
 
-| Topic | Data |
-|---|---|
-| `("FEE_DISTRIBUTOR", "fee_distributed")` | `{ treasury_amount, lp_amount, lp_share_bps }` |
-| `("FEE_DISTRIBUTOR", "lp_share_updated")` | `{ old_bps, new_bps }` |
-| `("FEE_DISTRIBUTOR", "treasury_updated")` | `{ old_treasury, new_treasury }` |
-| `("FEE_DISTRIBUTOR", "lp_address_updated")` | `{ old_lp_address, new_lp_address }` |
-| `("FEE_DISTRIBUTOR", "admin_updated")` | `{ old_admin, new_admin }` |
+An admin can schedule a full replacement list with
+`schedule_recipients(admin, recipients)`. The list is validated before being
+queued. The admin can apply it with `apply_recipients(admin)` only after
+17,280 ledgers (approximately 24 hours at five seconds per ledger). The pending
+list and execution ledger are readable through `get_pending_recipients`.
+`cancel_recipients_update(admin)` discards a pending change. Existing recipients
+remain active until a scheduled update is applied.
 
-## Integration with fee_calculator
+The distributor stores the pending list itself rather than relying on an
+off-chain relayer to execute an event from the generic admin timelock.
 
-The typical call sequence is:
+## Deployment and migration
 
-1. `fee_calculator::calculate_fee(amount)` → returns `fee_amount`
-2. `fee_distributor::distribute(settlement_caller, fee_amount)` — splits the fee
+The constructor arguments are `admin`, `recipients`, `usdc_token`, and
+`allowed_caller`. Configure `FEE_DISTRIBUTOR_RECIPIENTS` as a JSON array of
+objects with `address` and `share_bps` fields, for example:
 
-See `src/test.rs::test_distribute_fee_calculator_output` for an example.
-
-## Setup
-
-```bash
-cd dabdub_contracts
-cargo test -p fee_distributor
+```json
+[
+  { "address": "G…", "share_bps": 7000 },
+  { "address": "G…", "share_bps": 2000 },
+  { "address": "G…", "share_bps": 1000 }
+]
 ```
+
+This constructor and storage layout replace the legacy treasury/LP fields.
+Existing instances cannot adopt the new recipient list in place; redeploy and
+update dependent contract configuration using the deployment runbook.

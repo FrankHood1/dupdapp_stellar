@@ -41,9 +41,23 @@ pub struct PaymentEscrow {
     pub status: PaymentStatus,
     pub expiry: u32,
     pub dispute_window_end: u32,
+    pub dispute_resolution_deadline: u32,
     pub dispute_reason: Option<String>,
     pub asset_type: AssetType,
 }
+
+// Storage strategy (see docs/storage-strategy.md for full rationale):
+//
+// * Instance storage holds contract-wide configuration (admin, token addresses,
+//   registry, emergency signers, upgrade timelock, version, limits). It is
+//   loaded on every invocation and shares the contract's TTL, so it is kept
+//   alive by `extend_ttl` on each deposit.
+// * Persistent storage holds per-payment `PaymentEscrow` records keyed by
+//   `DataKey::Payment(payment_id)`. Each record is independently archivable and
+//   must outlive its business expiry, so `deposit` extends its TTL to
+//   `ttl_ledgers + 1` to keep the record readable at the refund point.
+// * Temporary storage is not used: escrowed funds and their records must never
+//   be silently evicted, so no data here is safe to lose on expiry.
 
 #[contracttype]
 #[derive(Clone)]
@@ -121,6 +135,7 @@ const DEFAULT_MAX_DISPUTE_WINDOW_LEDGERS: u32 = 51_840;
 // expiry and Soroban archival are separate: deposit extends storage through
 // expiry + 1 so the first refundable ledger remains accessible.
 const DEFAULT_MAX_TTL_LEDGERS: u32 = 518_400;
+const DEFAULT_DISPUTE_RESOLUTION_DELAY_LEDGERS: u32 = 17_280;
 const EMERGENCY_SIGNER_COUNT: u32 = 3;
 const DEFAULT_UPGRADE_DELAY_LEDGERS: u32 = 17_280;
 
@@ -270,7 +285,12 @@ impl PaymentEscrowContract {
         let version: u32 = env.storage().instance().get(&DataKey::Version).unwrap_or(0);
         env.storage().instance().set(&DataKey::Version, &(version + 1));
 
-        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
+        env.events().publish(
+            ("ESCROW", "upgrade_applied"),
+            (new_wasm_hash, version + 1, apply_ledger),
+        );
     }
 
     /// Return the current contract version.
@@ -456,6 +476,7 @@ impl PaymentEscrowContract {
             status: PaymentStatus::Pending,
             expiry,
             dispute_window_end,
+            dispute_resolution_deadline: 0,
             dispute_reason: None,
             asset_type,
         };
@@ -494,9 +515,11 @@ impl PaymentEscrowContract {
         Self::transfer_from_contract(&env, &payment.merchant, remaining, &payment.asset_type);
         payment.released_amount = payment.amount;
         payment.status = PaymentStatus::Released;
+        let release_key = DataKey::Payment(payment_id.clone());
+        env.storage().persistent().set(&release_key, &payment);
         env.storage()
             .persistent()
-            .set(&DataKey::Payment(payment_id.clone()), &payment);
+            .extend_ttl(&release_key, MAX_TTL_LEDGERS, MAX_TTL_LEDGERS);
 
         env.events().publish(
             ("ESCROW", "release"),
@@ -531,9 +554,11 @@ impl PaymentEscrowContract {
         if payment.released_amount == payment.amount {
             payment.status = PaymentStatus::Released;
         }
+        let partial_key = DataKey::Payment(payment_id.clone());
+        env.storage().persistent().set(&partial_key, &payment);
         env.storage()
             .persistent()
-            .set(&DataKey::Payment(payment_id.clone()), &payment);
+            .extend_ttl(&partial_key, MAX_TTL_LEDGERS, MAX_TTL_LEDGERS);
 
         env.events().publish(
             ("ESCROW", "release"),
@@ -556,9 +581,11 @@ impl PaymentEscrowContract {
 
         payment.released_amount = payment.amount;
         payment.status = PaymentStatus::Expired;
+        let expire_key = DataKey::Payment(payment_id.clone());
+        env.storage().persistent().set(&expire_key, &payment);
         env.storage()
             .persistent()
-            .set(&DataKey::Payment(payment_id.clone()), &payment);
+            .extend_ttl(&expire_key, MAX_TTL_LEDGERS, MAX_TTL_LEDGERS);
 
         env.events().publish(
             ("ESCROW", "expired"),
@@ -581,9 +608,11 @@ impl PaymentEscrowContract {
         Self::transfer_from_contract(&env, &payment.customer, remaining, &payment.asset_type);
         payment.released_amount = payment.amount;
         payment.status = PaymentStatus::Expired;
+        let refund_key = DataKey::Payment(payment_id.clone());
+        env.storage().persistent().set(&refund_key, &payment);
         env.storage()
             .persistent()
-            .set(&DataKey::Payment(payment_id.clone()), &payment);
+            .extend_ttl(&refund_key, MAX_TTL_LEDGERS, MAX_TTL_LEDGERS);
 
         env.events().publish(
             ("ESCROW", "refund"),
@@ -622,17 +651,57 @@ impl PaymentEscrowContract {
             panic!("Dispute window expired");
         }
 
+        let resolution_deadline = env
+            .ledger()
+            .sequence()
+            .checked_add(DEFAULT_DISPUTE_RESOLUTION_DELAY_LEDGERS)
+            .expect("Dispute resolution deadline overflow");
         payment.status = PaymentStatus::Disputed;
+        payment.dispute_resolution_deadline = resolution_deadline;
         payment.dispute_reason = Some(_reason.clone());
+        let dispute_key = DataKey::Payment(payment_id.clone());
+        env.storage().persistent().set(&dispute_key, &payment);
         env.storage()
             .persistent()
-            .set(&DataKey::Payment(payment_id.clone()), &payment);
+            .extend_ttl(&dispute_key, MAX_TTL_LEDGERS, MAX_TTL_LEDGERS);
 
         env.events().publish(
             ("ESCROW", "dispute"),
             EscrowStateEvent {
                 payment_id,
                 amount: Self::remaining_amount(&payment),
+            },
+        );
+    }
+
+    /// Refunds the remaining disputed balance to the customer after the admin
+    /// resolution window has elapsed. Anyone may trigger this fallback.
+    pub fn auto_resolve_dispute(env: Env, payment_id: BytesN<32>) {
+        let mut payment = Self::get_payment(env.clone(), payment_id.clone());
+        if payment.status != PaymentStatus::Disputed {
+            panic!("Dispute is not open");
+        }
+        if env.ledger().sequence() <= payment.dispute_resolution_deadline {
+            panic!("Dispute resolution deadline has not passed");
+        }
+
+        let remaining = Self::remaining_amount(&payment);
+        if remaining <= 0 {
+            panic!("Payment fully released");
+        }
+
+        Self::transfer_from_contract(&env, &payment.customer, remaining, &payment.asset_type);
+        payment.status = PaymentStatus::Expired;
+        payment.released_amount = payment.amount;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Payment(payment_id.clone()), &payment);
+
+        env.events().publish(
+            ("ESCROW", "dispute_auto_resolved"),
+            EscrowStateEvent {
+                payment_id,
+                amount: remaining,
             },
         );
     }
@@ -647,9 +716,14 @@ impl PaymentEscrowContract {
         // `dispute_window_end` (which is <= `expiry`), and once open the funds are
         // frozen until the admin rules on it. Enforcing expiry here would leave a
         // disputed payment that outlives its expiry with no settlement path, since
-        // `expire`/`refund` reject non-Pending payments.
+        // `expire`/`refund` reject non-Pending payments. The dispute resolution
+        // deadline instead bounds this admin path and enables the customer refund
+        // fallback.
         if payment.status != PaymentStatus::Disputed {
             panic!("Dispute is not open");
+        }
+        if env.ledger().sequence() > payment.dispute_resolution_deadline {
+            panic!("Dispute resolution deadline has passed");
         }
         if winner != payment.customer && winner != payment.merchant {
             panic!("Invalid dispute winner");
@@ -667,9 +741,11 @@ impl PaymentEscrowContract {
             PaymentStatus::Expired
         };
         payment.released_amount = payment.amount;
+        let resolve_key = DataKey::Payment(payment_id.clone());
+        env.storage().persistent().set(&resolve_key, &payment);
         env.storage()
             .persistent()
-            .set(&DataKey::Payment(payment_id.clone()), &payment);
+            .extend_ttl(&resolve_key, MAX_TTL_LEDGERS, MAX_TTL_LEDGERS);
 
         let topic = if winner == payment.merchant {
             "release"
@@ -703,6 +779,9 @@ impl PaymentEscrowContract {
         let mut payment = Self::get_payment(env.clone(), payment_id.clone());
         if payment.status != PaymentStatus::Disputed {
             panic!("Dispute is not open");
+        }
+        if env.ledger().sequence() > payment.dispute_resolution_deadline {
+            panic!("Dispute resolution deadline has passed");
         }
 
         let remaining = Self::remaining_amount(&payment);
@@ -755,10 +834,17 @@ impl PaymentEscrowContract {
     }
 
     pub fn get_payment(env: Env, payment_id: BytesN<32>) -> PaymentEscrow {
+        let key = DataKey::Payment(payment_id);
+        let payment: PaymentEscrow = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .expect("Payment not found");
+        // Extend TTL on every read to prevent archival before payment expiry.
         env.storage()
             .persistent()
-            .get(&DataKey::Payment(payment_id))
-            .expect("Payment not found")
+            .extend_ttl(&key, MAX_TTL_LEDGERS, MAX_TTL_LEDGERS);
+        payment
     }
 
     pub fn get_balance(env: Env, payment_id: BytesN<32>) -> i128 {
