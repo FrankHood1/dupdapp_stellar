@@ -278,10 +278,6 @@ fn test_propose_admin_does_not_take_effect_until_accepted() {
     assert_eq!(client.get_admin(), admin);
 }
 
-#[test]
-fn test_accept_admin_completes_transfer() {
-    let (env, client, admin) = setup();
-    l
 // ---------------------------------------------------------------------------
 
 #[test]

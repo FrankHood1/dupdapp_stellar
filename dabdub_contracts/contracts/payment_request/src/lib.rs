@@ -106,7 +106,9 @@ impl PaymentRequestContract {
             memo,
         };
 
-        env.storage().persistent().set(&DataKey::Request(id), &request);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Request(id), &request);
         env.storage().instance().set(&DataKey::NextId, &(id + 1));
 
         Ok(id)
@@ -148,7 +150,9 @@ impl PaymentRequestContract {
         }
 
         request.status = PaymentRequestStatus::Cancelled;
-        env.storage().persistent().set(&DataKey::Request(id), &request);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Request(id), &request);
         Ok(())
     }
 
@@ -160,16 +164,14 @@ impl PaymentRequestContract {
             .ok_or(Error::NotFound)?;
 
         request.status = status;
-        env.storage().persistent().set(&DataKey::Request(id), &request);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Request(id), &request);
         Ok(())
     }
 
     pub fn list_requests(env: Env) -> Vec<PaymentRequest> {
-        let next_id: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::NextId)
-            .unwrap_or(0);
+        let next_id: u64 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
 
         let mut requests = Vec::new(env);
         let mut id: u64 = 0;

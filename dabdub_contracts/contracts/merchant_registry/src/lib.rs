@@ -2,9 +2,7 @@
 
 mod test;
 
-use soroban_sdk::{
-    contract, contractimpl, contracttype, Address, Env, String, Vec,
-};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Vec};
 
 /// Lifecycle states for a registered merchant.
 #[contracttype]
@@ -263,7 +261,10 @@ impl MerchantRegistryContract {
 
         env.events().publish(
             ("REGISTRY", "merchant_registered"),
-            MerchantRegisteredEvent { merchant: merchant.clone(), name: name.clone() },
+            MerchantRegisteredEvent {
+                merchant: merchant.clone(),
+                name: name.clone(),
+            },
         );
     }
 
@@ -323,7 +324,9 @@ impl MerchantRegistryContract {
 
         env.events().publish(
             ("REGISTRY", "merchant_suspended"),
-            MerchantSuspendedEvent { merchant: merchant.clone() },
+            MerchantSuspendedEvent {
+                merchant: merchant.clone(),
+            },
         );
     }
 
@@ -343,14 +346,17 @@ impl MerchantRegistryContract {
             panic!("Merchant already active");
         }
         if record.status == MerchantStatus::Terminated {
-            panic!("Cannot reac
+            panic!("Cannot reactivate a terminated merchant");
+        }
 
         record.status = MerchantStatus::Active;
         env.storage().persistent().set(&key, &record);
 
         env.events().publish(
             ("REGISTRY", "merchant_reactivated"),
-            MerchantReactivatedEvent { merchant: merchant.clone() },
+            MerchantReactivatedEvent {
+                merchant: merchant.clone(),
+            },
         );
     }
 
@@ -378,7 +384,9 @@ impl MerchantRegistryContract {
 
         env.events().publish(
             ("REGISTRY", "merchant_terminated"),
-            MerchantTerminatedEvent { merchant: merchant.clone() },
+            MerchantTerminatedEvent {
+                merchant: merchant.clone(),
+            },
         );
     }
 
@@ -399,7 +407,10 @@ impl MerchantRegistryContract {
 
         env.events().publish(
             ("REGISTRY", "kyc_status_updated"),
-            KYCStatusUpdatedEvent { merchant: merchant.clone(), verified },
+            KYCStatusUpdatedEvent {
+                merchant: merchant.clone(),
+                verified,
+            },
         );
     }
 
@@ -424,7 +435,10 @@ impl MerchantRegistryContract {
 
         env.events().publish(
             ("REGISTRY", "fee_tier_updated"),
-            FeeTierUpdatedEvent { merchant: merchant.clone(), fee_bps },
+            FeeTierUpdatedEvent {
+                merchant: merchant.clone(),
+                fee_bps,
+            },
         );
     }
 
@@ -443,7 +457,10 @@ impl MerchantRegistryContract {
 
         env.events().publish(
             ("REGISTRY", "admin_transferred"),
-            AdminTransferredEvent { old_admin, new_admin },
+            AdminTransferredEvent {
+                old_admin,
+                new_admin,
+            },
         );
     }
 
@@ -453,9 +470,7 @@ impl MerchantRegistryContract {
 
     /// Fetch a single merchant record.  Returns `None` if not registered.
     pub fn get_merchant(env: Env, merchant: Address) -> Option<MerchantRecord> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Merchant(merchant))
+        env.storage().persistent().get(&DataKey::Merchant(merchant))
     }
 
     /// Return the total number of registered merchants.

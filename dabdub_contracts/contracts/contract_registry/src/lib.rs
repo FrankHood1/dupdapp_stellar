@@ -60,9 +60,7 @@ impl ContractRegistry {
 
     /// Returns true if an address is registered for the given name.
     pub fn has_address(env: Env, name: Symbol) -> bool {
-        env.storage()
-            .persistent()
-            .has(&DataKey::Address(name))
+        env.storage().persistent().has(&DataKey::Address(name))
     }
 }
 

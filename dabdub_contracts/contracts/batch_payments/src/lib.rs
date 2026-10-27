@@ -75,11 +75,19 @@ impl BatchPaymentContract {
 
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::MinAmount, &min_amount);
-        env.storage().instance().set(&DataKey::MaxAmount, &max_amount);
-        env.storage().instance().set(&DataKey::MaxBatchSize, &DEFAULT_MAX_BATCH_SIZE);
+        env.storage()
+            .instance()
+            .set(&DataKey::MinAmount, &min_amount);
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxAmount, &max_amount);
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxBatchSize, &DEFAULT_MAX_BATCH_SIZE);
         env.storage().instance().set(&DataKey::Counter, &0u64);
-        env.storage().instance().set(&DataKey::Version, &CONTRACT_VERSION);
+        env.storage()
+            .instance()
+            .set(&DataKey::Version, &CONTRACT_VERSION);
     }
 
     /// Returns the ABI version of this contract.
@@ -106,8 +114,12 @@ impl BatchPaymentContract {
             .unwrap_or_else(|| panic!("contract not initialized"));
         admin.require_auth();
 
-        env.storage().instance().set(&DataKey::MinAmount, &min_amount);
-        env.storage().instance().set(&DataKey::MaxAmount, &max_amount);
+        env.storage()
+            .instance()
+            .set(&DataKey::MinAmount, &min_amount);
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxAmount, &max_amount);
         env.events().publish(
             (soroban_sdk::Symbol::new(&env, "LimitsUpdated"),),
             (min_amount, max_amount),
@@ -127,7 +139,9 @@ impl BatchPaymentContract {
             .unwrap_or_else(|| panic!("contract not initialized"));
         admin.require_auth();
 
-        env.storage().instance().set(&DataKey::MaxBatchSize, &new_max);
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxBatchSize, &new_max);
         env.events().publish(
             (soroban_sdk::Symbol::new(&env, "MaxBatchSizeUpdated"),),
             (new_max,),
@@ -220,7 +234,9 @@ impl BatchPaymentContract {
                 memo: item.memo.clone(),
                 merchant: merchant.clone(),
             };
-            env.storage().persistent().set(&DataKey::Payment(id_bytes.clone()), &record);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Payment(id_bytes.clone()), &record);
 
             let record = PaymentRecord {
                 id: id_bytes.clone(),
@@ -248,9 +264,9 @@ impl BatchPaymentContract {
         }
 
         let final_counter = counter + count as u64;
-        env.storage().instance().set(&DataKey::Counter, &final_counter);
-
+        env.storage()
+            .instance()
+            .set(&DataKey::Counter, &final_counter);
         payment_ids
     }
-
-    /// Returns the on-chain
+}

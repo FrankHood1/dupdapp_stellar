@@ -61,7 +61,9 @@ fn setup_env() -> Setup {
     let usdc = env
         .register_stellar_asset_contract_v2(token_admin.clone())
         .address();
-    let xlm = env.register_stellar_asset_contract_v2(token_admin).address();
+    let xlm = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
 
     let emergency_signer_one = Address::generate(&env);
     let emergency_signer_two = Address::generate(&env);
@@ -128,7 +130,9 @@ fn setup_with_registry() -> (
     let usdc = env
         .register_stellar_asset_contract_v2(token_admin.clone())
         .address();
-    let xlm = env.register_stellar_asset_contract_v2(token_admin).address();
+    let xlm = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
 
     let emergency_signer_one = Address::generate(&env);
     let emergency_signer_two = Address::generate(&env);
@@ -512,7 +516,11 @@ fn test_release_blocked_while_disputed() {
     let payment_id = make_id(&env, 1);
 
     deposit_default_ttl(&client, &customer, &payment_id, &merchant, 250_000_000i128);
-    client.dispute(&customer, &payment_id, &String::from_str(&env, "hold funds"));
+    client.dispute(
+        &customer,
+        &payment_id,
+        &String::from_str(&env, "hold funds"),
+    );
     client.release(&admin, &payment_id);
 }
 
@@ -522,7 +530,11 @@ fn test_resolve_dispute_to_customer() {
     let payment_id = make_id(&env, 1);
 
     deposit_default_ttl(&client, &customer, &payment_id, &merchant, 250_000_000i128);
-    client.dispute(&merchant, &payment_id, &String::from_str(&env, "chargeback"));
+    client.dispute(
+        &merchant,
+        &payment_id,
+        &String::from_str(&env, "chargeback"),
+    );
     client.resolve_dispute(&admin, &payment_id, &customer);
 
     let payment = client.get_payment(&payment_id);
@@ -540,7 +552,11 @@ fn test_resolve_dispute_to_merchant() {
     let payment_id = make_id(&env, 1);
 
     deposit_default_ttl(&client, &customer, &payment_id, &merchant, 250_000_000i128);
-    client.dispute(&customer, &payment_id, &String::from_str(&env, "investigate"));
+    client.dispute(
+        &customer,
+        &payment_id,
+        &String::from_str(&env, "investigate"),
+    );
     client.resolve_dispute(&admin, &payment_id, &merchant);
 
     let payment = client.get_payment(&payment_id);
@@ -560,7 +576,11 @@ fn test_resolve_dispute_unauthorized() {
     let random = Address::generate(&env);
 
     deposit_default_ttl(&client, &customer, &payment_id, &merchant, 250_000_000i128);
-    client.dispute(&customer, &payment_id, &String::from_str(&env, "investigate"));
+    client.dispute(
+        &customer,
+        &payment_id,
+        &String::from_str(&env, "investigate"),
+    );
     client.resolve_dispute(&random, &payment_id, &merchant);
 }
 
@@ -572,7 +592,11 @@ fn test_resolve_dispute_invalid_winner() {
     let random = Address::generate(&env);
 
     deposit_default_ttl(&client, &customer, &payment_id, &merchant, 250_000_000i128);
-    client.dispute(&merchant, &payment_id, &String::from_str(&env, "investigate"));
+    client.dispute(
+        &merchant,
+        &payment_id,
+        &String::from_str(&env, "investigate"),
+    );
     client.resolve_dispute(&admin, &payment_id, &random);
 }
 
@@ -740,7 +764,13 @@ fn test_emergency_drain_cooldown_prevents_repeated_drain() {
     ) = setup_env();
 
     let payment_id_a = make_id(&env, 53);
-    deposit_default_ttl(&client, &customer, &payment_id_a, &merchant, 100_000_000i128);
+    deposit_default_ttl(
+        &client,
+        &customer,
+        &payment_id_a,
+        &merchant,
+        100_000_000i128,
+    );
     client.emergency_drain(
         &emergency_signer_one,
         &emergency_signer_one,
@@ -748,7 +778,13 @@ fn test_emergency_drain_cooldown_prevents_repeated_drain() {
     );
 
     let payment_id_b = make_id(&env, 54);
-    deposit_default_ttl(&client, &customer, &payment_id_b, &merchant, 100_000_000i128);
+    deposit_default_ttl(
+        &client,
+        &customer,
+        &payment_id_b,
+        &merchant,
+        100_000_000i128,
+    );
     client.emergency_drain(
         &emergency_signer_one,
         &emergency_signer_one,
@@ -864,7 +900,9 @@ fn test_max_ttl_rejects_early_refund_and_allows_refund_after_expiry() {
         env.storage().instance().extend_ttl(ttl + 1, ttl + 1);
         for owner in [&contract_id, &customer] {
             let key = (soroban_sdk::symbol_short!("Balance"), owner.clone());
-            env.storage().persistent().extend_ttl(&key, ttl + 1, ttl + 1);
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, ttl + 1, ttl + 1);
         }
     });
     env.ledger().set_sequence_number(expiry);

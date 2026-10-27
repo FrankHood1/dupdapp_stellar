@@ -2,9 +2,7 @@
 
 mod test;
 
-use soroban_sdk::{
-    contract, contractevent, contractimpl, contracttype, Address, Env, Vec,
-};
+use soroban_sdk::{contract, contractevent, contractimpl, contracttype, Address, Env, Vec};
 
 // ── Role ────────────────────────────────────────────────────────────────────
 
@@ -17,9 +15,7 @@ pub enum Role {
     SuperAdmin,
 }
 
-use soroban_sdk::{
-    contract, contractevent, contractimpl, contracttype, Address, Env, Vec,
-};
+use soroban_sdk::{contract, contractevent, contractimpl, contracttype, Address, Env, Vec};
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -114,12 +110,10 @@ impl RbacAccessContract {
             if count <= 1 {
                 panic!("cannot revoke last super admin");
             }
-            env.storage()
-                .persistent()
-                .set(
-                    &DataKey::SuperAdminCount,
-                    &count.checked_sub(1).expect("SuperAdminCount underflow"),
-                );
+            env.storage().persistent().set(
+                &DataKey::SuperAdminCount,
+                &count.checked_sub(1).expect("SuperAdminCount underflow"),
+            );
         }
 
         env.storage().persistent().remove(&key);

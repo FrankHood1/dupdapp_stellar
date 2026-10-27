@@ -86,6 +86,17 @@ cargo test -p payment-escrow test_max_ttl
 - [`stellar-cli`](https://developers.stellar.org/docs/tools/developer-tools) (for deployment)
 - `wasm-opt` (binaryen), for optimised release builds
 
+### Rust formatting
+
+Enable the repository-managed pre-commit hook once per clone:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+The hook checks formatting with `cargo fmt --all -- --check`. To apply
+formatting, run `cargo fmt --all` from `dabdub_contracts/`.
+
 ```bash
 rustup target add wasm32v1-none
 ```
@@ -174,4 +185,3 @@ Grafana/Loki/Promtail configs under [`grafana/`](grafana/) and [`docker-compose.
 
 <!-- handsoff-issue-1215 -->
 - #1215: [P1] merchant_registry: add merchant metadata fields (website, contact, country)
-

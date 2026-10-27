@@ -62,7 +62,9 @@ impl FeeCalculatorContract {
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::FeeTiers, &tiers);
-        env.storage().instance().set(&DataKey::MinFeeStroops, &0i128);
+        env.storage()
+            .instance()
+            .set(&DataKey::MinFeeStroops, &0i128);
         env.storage()
             .instance()
             .set(&DataKey::MinFeeBps, &min_fee_bps);
@@ -336,27 +338,5 @@ impl FeeCalculatorContract {
         data.volume_usdc = data.volume_usdc.checked_add(amount).expect("overflow");
         env.storage().persistent().set(&key, &data);
         data.volume_usdc
-    }
-    /// Selects the applicable fee tier for the given volume.
-    ///
-    /// Tiers are validated as strictly increasing by `validate_tiers`, so the
-    /// `threshold_usdc` array is sorted. We binary-search for the highest tier
-    /// whose threshold is `<= volume`, which is O(log n) instead of the
-    /// previous O(n) linear scan.
-    fn select_fee_bps(env: &Env, volume: i128) -> u32 {
-        let tiers: Vec<FeeTier> = env
-            .storage()
-            .instance()
-            .get(&DataKey::FeeTiers)
-            .expect("tiers not initialized");
-
-        let idx = if lo == 0 { 0 } else { lo - 1 };
-        tiers.get(idx).unwrap().fee_bps
-            } else {
-                hi = mid;
-            }
-        }
-        let idx = if lo == 0 { 0 } else { lo - 1 };
-        tiers.get(idx).unwrap().fee_bps
     }
 }

@@ -36,13 +36,28 @@ fn setup(lp_share_bps: i128) -> Setup<'static> {
 
     let contract_id = env.register(
         FeeDistributorContract,
-        (&admin, &treasury, &lp, lp_share_bps, &token_id.address(), &caller),
+        (
+            &admin,
+            &treasury,
+            &lp,
+            lp_share_bps,
+            &token_id.address(),
+            &caller,
+        ),
     );
 
     let client = FeeDistributorContractClient::new(&env, &contract_id);
     let token = TokenClient::new(&env, &token_id.address());
 
-    Setup { env, admin, treasury, lp, caller, token, client }
+    Setup {
+        env,
+        admin,
+        treasury,
+        lp,
+        caller,
+        token,
+        client,
+    }
 }
 
 #[test]
@@ -202,7 +217,10 @@ fn test_set_lp_share_emits_event() {
     s.client.set_lp_share(&s.admin, &2_000);
     let events = s.env.events().all();
     let last = events.last().unwrap();
-    assert_eq!(last.1, (Symbol::new(&s.env, "lp_share_set"),).into_val(&s.env));
+    assert_eq!(
+        last.1,
+        (Symbol::new(&s.env, "lp_share_set"),).into_val(&s.env)
+    );
     let (old, new): (i128, i128) = last.2.into_val(&s.env);
     assert_eq!(old, 5_000);
     assert_eq!(new, 2_000);
@@ -215,7 +233,10 @@ fn test_set_treasury_emits_event() {
     s.client.set_treasury(&s.admin, &new_treasury);
     let events = s.env.events().all();
     let last = events.last().unwrap();
-    assert_eq!(last.1, (Symbol::new(&s.env, "treasury_set"),).into_val(&s.env));
+    assert_eq!(
+        last.1,
+        (Symbol::new(&s.env, "treasury_set"),).into_val(&s.env)
+    );
     let (old, new): (Address, Address) = last.2.into_val(&s.env);
     assert_eq!(old, s.treasury);
     assert_eq!(new, new_treasury);
@@ -228,7 +249,10 @@ fn test_set_lp_address_emits_event() {
     s.client.set_lp_address(&s.admin, &new_lp);
     let events = s.env.events().all();
     let last = events.last().unwrap();
-    assert_eq!(last.1, (Symbol::new(&s.env, "lp_address_set"),).into_val(&s.env));
+    assert_eq!(
+        last.1,
+        (Symbol::new(&s.env, "lp_address_set"),).into_val(&s.env)
+    );
     let (old, new): (Address, Address) = last.2.into_val(&s.env);
     assert_eq!(old, s.lp);
     assert_eq!(new, new_lp);
@@ -301,5 +325,4 @@ fn test_transfer_admin_rejects_non_admin() {
     s.client.set_lp_share(&s.admin, &2_000);
     let (_, _, bps) = s.client.get_config();
     assert_eq!(bps, 2_000);
-}
 }

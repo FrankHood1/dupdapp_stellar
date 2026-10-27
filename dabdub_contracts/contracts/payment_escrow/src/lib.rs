@@ -3,8 +3,7 @@
 mod test;
 
 use soroban_sdk::{
-    contract, contractclient, contractimpl, contracttype, token, Address, BytesN, Env, String,
-    Vec,
+    contract, contractclient, contractimpl, contracttype, token, Address, BytesN, Env, String, Vec,
 };
 
 #[contracttype]
@@ -158,7 +157,9 @@ impl PaymentEscrowContract {
 
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::XlmToken, &xlm_token);
-        env.storage().instance().set(&DataKey::UsdcToken, &usdc_token);
+        env.storage()
+            .instance()
+            .set(&DataKey::UsdcToken, &usdc_token);
         env.storage()
             .instance()
             .set(&DataKey::DefaultTtlLedgers, &default_ttl_ledgers);
@@ -173,17 +174,19 @@ impl PaymentEscrowContract {
         env.storage()
             .instance()
             .set(&DataKey::EmergencyTreasury, &emergency_treasury);
-        env.storage()
-            .instance()
-            .set(&DataKey::EmergencyCooldownLedgers, &emergency_cooldown_ledgers);
+        env.storage().instance().set(
+            &DataKey::EmergencyCooldownLedgers,
+            &emergency_cooldown_ledgers,
+        );
         env.storage()
             .instance()
             .set(&DataKey::EmergencyLastDrainLedger, &0u32);
 
         // Initialize the upgrade timelock delay to a safe default.
-        env.storage()
-            .instance()
-            .set(&DataKey::UpgradeDelayLedgers, &DEFAULT_UPGRADE_DELAY_LEDGERS);
+        env.storage().instance().set(
+            &DataKey::UpgradeDelayLedgers,
+            &DEFAULT_UPGRADE_DELAY_LEDGERS,
+        );
 
         // Initialize contract version to 1.
         env.storage().instance().set(&DataKey::Version, &1u32);
@@ -231,8 +234,12 @@ impl PaymentEscrowContract {
             .get(&DataKey::PendingUpgradeHash)
             .unwrap_or_else(|| panic!("No pending upgrade"));
 
-        env.storage().instance().remove(&DataKey::PendingUpgradeHash);
-        env.storage().instance().remove(&DataKey::PendingUpgradeLedger);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingUpgradeHash);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingUpgradeLedger);
 
         env.events().publish(
             ("ESCROW", "upgrade_cancelled"),
@@ -264,11 +271,17 @@ impl PaymentEscrowContract {
             panic!("Upgrade timelock has not elapsed");
         }
 
-        env.storage().instance().remove(&DataKey::PendingUpgradeHash);
-        env.storage().instance().remove(&DataKey::PendingUpgradeLedger);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingUpgradeHash);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingUpgradeLedger);
 
         let version: u32 = env.storage().instance().get(&DataKey::Version).unwrap_or(0);
-        env.storage().instance().set(&DataKey::Version, &(version + 1));
+        env.storage()
+            .instance()
+            .set(&DataKey::Version, &(version + 1));
 
         env.deployer().update_current_contract_wasm(new_wasm_hash);
     }
@@ -280,14 +293,9 @@ impl PaymentEscrowContract {
 
     /// Return the currently pending upgrade hash and its apply ledger, if any.
     pub fn get_pending_upgrade(env: Env) -> Option<(BytesN<32>, u32)> {
-        let hash: Option<BytesN<32>> = env
-            .storage()
-            .instance()
-            .get(&DataKey::PendingUpgradeHash);
-        let apply_ledger: Option<u32> = env
-            .storage()
-            .instance()
-            .get(&DataKey::PendingUpgradeLedger);
+        let hash: Option<BytesN<32>> = env.storage().instance().get(&DataKey::PendingUpgradeHash);
+        let apply_ledger: Option<u32> =
+            env.storage().instance().get(&DataKey::PendingUpgradeLedger);
         match (hash, apply_ledger) {
             (Some(h), Some(l)) => Some((h, l)),
             _ => None,
@@ -312,7 +320,8 @@ impl PaymentEscrowContract {
         let previous: Option<Address> = env.storage().instance().get(&DataKey::RegistryContract);
         let action = match (&previous, &registry) {
             (_, None) => {
-                let (s1, s2) = removal_signers.expect("Registry removal requires emergency signers");
+                let (s1, s2) =
+                    removal_signers.expect("Registry removal requires emergency signers");
                 if s1 == s2 {
                     panic!("Emergency signers must be distinct");
                 }
@@ -324,8 +333,14 @@ impl PaymentEscrowContract {
                 "removed"
             }
             (prev, Some(reg)) => {
-                env.storage().instance().set(&DataKey::RegistryContract, reg);
-                if prev.is_some() { "changed" } else { "set" }
+                env.storage()
+                    .instance()
+                    .set(&DataKey::RegistryContract, reg);
+                if prev.is_some() {
+                    "changed"
+                } else {
+                    "set"
+                }
             }
         };
 
@@ -352,7 +367,10 @@ impl PaymentEscrowContract {
             .set(&DataKey::MaxDisputeWindowLedgers, &value);
         env.events().publish(
             ("CONFIG", "max_dispute_window"),
-            LimitUpdatedEvent { previous, new: value },
+            LimitUpdatedEvent {
+                previous,
+                new: value,
+            },
         );
     }
 
@@ -365,10 +383,15 @@ impl PaymentEscrowContract {
             panic!("Max TTL must be > 0");
         }
         let previous = Self::get_max_ttl_ledgers(env.clone());
-        env.storage().instance().set(&DataKey::MaxTtlLedgers, &value);
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxTtlLedgers, &value);
         env.events().publish(
             ("CONFIG", "max_ttl"),
-            LimitUpdatedEvent { previous, new: value },
+            LimitUpdatedEvent {
+                previous,
+                new: value,
+            },
         );
     }
 
@@ -537,10 +560,7 @@ impl PaymentEscrowContract {
 
         env.events().publish(
             ("ESCROW", "release"),
-            EscrowStateEvent {
-                payment_id,
-                amount,
-            },
+            EscrowStateEvent { payment_id, amount },
         );
     }
 
@@ -803,7 +823,12 @@ impl PaymentEscrowContract {
             .unwrap_or(DEFAULT_MAX_TTL_LEDGERS)
     }
 
-    pub fn emergency_drain(env: Env, caller: Address, signer_one: Address, signer_two: Address) -> i128 {
+    pub fn emergency_drain(
+        env: Env,
+        caller: Address,
+        signer_one: Address,
+        signer_two: Address,
+    ) -> i128 {
         caller.require_auth();
         if signer_one == signer_two {
             panic!("Emergency signers must be distinct");
@@ -909,10 +934,18 @@ impl PaymentEscrowContract {
     /// SAC reverting, etc.) every settlement call for payments in that asset fails
     /// atomically and the payment record is left unchanged. See the "Stuck payment
     /// recovery" section of `EMERGENCY_RUNBOOK.md` for the operator procedure.
-    fn transfer_from_contract(env: &Env, recipient: &Address, amount: i128, asset_type: &AssetType) {
+    fn transfer_from_contract(
+        env: &Env,
+        recipient: &Address,
+        amount: i128,
+        asset_type: &AssetType,
+    ) {
         let token_addr = Self::token_address(env, asset_type);
-        token::Client::new(env, &token_addr)
-            .transfer(&env.current_contract_address(), recipient, &amount);
+        token::Client::new(env, &token_addr).transfer(
+            &env.current_contract_address(),
+            recipient,
+            &amount,
+        );
     }
 
     fn require_emergency_signer(env: &Env, signer: &Address) {

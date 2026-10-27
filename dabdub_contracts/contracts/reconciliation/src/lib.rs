@@ -98,7 +98,9 @@ impl ReconciliationContract {
 
         let batch_id = Self::latest_batch_id(&env).map(|id| id + 1).unwrap_or(0);
 
-        env.storage().persistent().set(&DataKey::Batch(batch_id), &batch);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Batch(batch_id), &batch);
         env.storage().instance().set(&DataKey::CurrentBatch, &batch);
         env.storage()
             .instance()
@@ -160,7 +162,11 @@ impl ReconciliationContract {
     #[deprecated(
         note = "inverted return value and latest-batch-only semantics — use verify_settlement_proof instead"
     )]
-    pub fn verify_settlement(env: Env, payment_id: BytesN<32>, proof: Vec<MerkleProofNode>) -> bool {
+    pub fn verify_settlement(
+        env: Env,
+        payment_id: BytesN<32>,
+        proof: Vec<MerkleProofNode>,
+    ) -> bool {
         Self::require_proof_depth(&proof);
         let batch: ReconciliationBatch = env
             .storage()
@@ -203,13 +209,20 @@ impl ReconciliationContract {
     /// Permanently archives batches with IDs below `before_batch_id`, bounded
     /// by `max_batches` so retention can be applied incrementally. Current and
     /// newer batches remain available for proof verification.
-    pub fn archive_batches(env: Env, caller: Address, before_batch_id: u32, max_batches: u32) -> u32 {
+    pub fn archive_batches(
+        env: Env,
+        caller: Address,
+        before_batch_id: u32,
+        max_batches: u32,
+    ) -> u32 {
         caller.require_auth();
         Self::require_admin(&env, &caller);
         let upper = before_batch_id.min(Self::batch_count(env.clone()));
         let mut archived = 0;
         for batch_id in 0..upper {
-            if archived >= max_batches { break; }
+            if archived >= max_batches {
+                break;
+            }
             let key = DataKey::Batch(batch_id);
             if env.storage().persistent().has(&key) {
                 env.storage().persistent().remove(&key);
@@ -244,7 +257,9 @@ impl ReconciliationContract {
     }
 
     fn require_proof_depth(proof: &Vec<MerkleProofNode>) {
-        if proof.len() > MAX_PROOF_DEPTH { panic!("proof too long"); }
+        if proof.len() > MAX_PROOF_DEPTH {
+            panic!("proof too long");
+        }
     }
 
     fn require_admin(env: &Env, caller: &Address) {
@@ -267,6 +282,8 @@ impl ReconciliationContract {
         combined[..32].copy_from_slice(&left_arr);
         combined[32..].copy_from_slice(&right_arr);
 
-        env.crypto().sha256(&Bytes::from_slice(env, &combined)).into()
+        env.crypto()
+            .sha256(&Bytes::from_slice(env, &combined))
+            .into()
     }
 }
