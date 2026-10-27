@@ -71,15 +71,15 @@ pub struct BatchPaymentContract;
 #[contractimpl]
 impl BatchPaymentContract {
     /// One-time initialization for admin and amount limits.
-    pub fn init(env: Env, admin: Address, min_amount: i128, max_amount: i128) {
+    pub fn init(env: Env, admin: Address, min_amount: i128, max_amount: i128) -> Result<(), ContractError> {
         if env.storage().instance().has(&DataKey::Admin) {
-            panic!("contract already initialized");
+            return Err(ContractError::AlreadyInitialized);
         }
         if min_amount <= 0 {
-            panic!("min amount must be > 0");
+            return Err(ContractError::InvalidAmount);
         }
         if min_amount > max_amount {
-            panic!("min amount must be <= max amount");
+            return Err(ContractError::InvalidLimits);
         }
 
         admin.require_auth();
@@ -110,19 +110,19 @@ impl BatchPaymentContract {
     }
 
     /// Update payment amount limits. Admin-only.
-    pub fn set_limits(env: Env, min_amount: i128, max_amount: i128) {
+    pub fn set_limits(env: Env, min_amount: i128, max_amount: i128) -> Result<(), ContractError> {
         if min_amount <= 0 {
-            panic!("min amount must be > 0");
+            return Err(ContractError::InvalidAmount);
         }
         if min_amount > max_amount {
-            panic!("min amount must be <= max amount");
+            return Err(ContractError::InvalidLimits);
         }
 
         let admin: Address = env
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .unwrap_or_else(|| panic!("contract not initialized"));
+            .ok_or(ContractError::ContractNotInitialized)?;
         admin.require_auth();
 
         env.storage()
@@ -135,6 +135,7 @@ impl BatchPaymentContract {
             (soroban_sdk::Symbol::new(&env, "LimitsUpdated"),),
             (min_amount, max_amount),
         );
+        Ok(())
     }
 
     /// Update the maximum batch size. Admin-only.
@@ -187,7 +188,7 @@ impl BatchPaymentContract {
         env: Env,
         merchant: Address,
         payments: Vec<PaymentInput>,
-    ) -> Vec<BytesN<32>> {
+    ) -> Result<Vec<BytesN<32>>, ContractError> {
         merchant.require_auth();
 
         let current_ledger = env.ledger().sequence();
@@ -217,7 +218,7 @@ impl BatchPaymentContract {
             .storage()
             .instance()
             .get(&DataKey::MinAmount)
-            .unwrap_or_else(|| panic!("contract not initialized"));
+            .ok_or(ContractError::ContractNotInitialized)?;
         let max_amount: i128 = env
             .storage()
             .instance()
@@ -231,7 +232,7 @@ impl BatchPaymentContract {
 
         let count = payments.len();
         if count == 0 {
-            panic!("batch must contain at least one payment");
+            return Err(ContractError::BatchEmpty);
         }
         if count > max_batch_size {
             panic!("batch exceeds maximum of {} payments", max_batch_size);
@@ -241,10 +242,10 @@ impl BatchPaymentContract {
         for i in 0..count {
             let item = payments.get(i).unwrap();
             if item.amount < min_amount || item.amount > max_amount {
-                panic!("payment amount outside configured limits");
+                return Err(ContractError::PaymentAmountOutsideLimits);
             }
             if item.memo.len() == 0 {
-                panic!("payment at index {}: memo must not be empty", i);
+                return Err(ContractError::MemoEmpty);
             }
         }
 
@@ -255,6 +256,9 @@ impl BatchPaymentContract {
             .instance()
             .get(&DataKey::Counter)
             .unwrap_or(0u64);
+        let ledger_seq = env.ledger().sequence() as u64;
+        let ledger_ts = env.ledger().timestamp();
+        let merchant_xdr = merchant.clone().to_xdr(&env);
 
         for i in 0..count {
             let item = payments.get(i).unwrap();
@@ -298,7 +302,7 @@ impl BatchPaymentContract {
             .instance()
             .set(&DataKey::Counter, &final_counter);
 
-        payment_ids
+        Ok(payment_ids)
     }
 
     /// Returns the configured upper bound for a single atomic batch.
@@ -322,12 +326,12 @@ impl BatchPaymentContract {
             .storage()
             .instance()
             .get(&DataKey::MinAmount)
-            .unwrap_or_else(|| panic!("contract not initialized"));
+            .ok_or(ContractError::ContractNotInitialized)?;
         let max_amount: i128 = env
             .storage()
             .instance()
             .get(&DataKey::MaxAmount)
-            .unwrap_or_else(|| panic!("contract not initialized"));
-        (min_amount, max_amount)
+            .ok_or(ContractError::ContractNotInitialized)?;
+        Ok((min_amount, max_amount))
     }
 }

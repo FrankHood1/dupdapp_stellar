@@ -114,18 +114,17 @@ fn test_batch_over_hard_limit_reverts() {
         payments.push_back(make_payment(&env, (i as i128 + 1) * 10, "over-limit"));
     }
 
-    client.create_batch(&merchant, &payments);
+    let err = client.try_create_batch(&merchant, &payments).unwrap_err().unwrap();
+    assert_eq!(err, ContractError::BatchTooLarge);
 }
 
 #[test]
-#[should_panic(expected = "outside configured limits")]
 fn test_amount_below_min_reverts_entire_batch() {
     let env = Env::default();
     env.mock_all_auths();
     let (client, _admin) = deploy_and_init(&env, 1, 10_000);
 
     let merchant = Address::generate(&env);
-    // First item is valid, second has zero amount — entire batch must revert.
     let payments = soroban_sdk::vec![
         &env,
         make_payment(&env, 500, "valid"),
@@ -136,11 +135,11 @@ fn test_amount_below_min_reverts_entire_batch() {
         },
     ];
 
-    client.create_batch(&merchant, &payments);
+    let err = client.try_create_batch(&merchant, &payments).unwrap_err().unwrap();
+    assert_eq!(err, ContractError::PaymentAmountOutsideLimits);
 }
 
 #[test]
-#[should_panic(expected = "memo must not be empty")]
 fn test_empty_memo_reverts_entire_batch() {
     let env = Env::default();
     env.mock_all_auths();
@@ -156,7 +155,8 @@ fn test_empty_memo_reverts_entire_batch() {
         },
     ];
 
-    client.create_batch(&merchant, &payments);
+    let err = client.try_create_batch(&merchant, &payments).unwrap_err().unwrap();
+    assert_eq!(err, ContractError::MemoEmpty);
 }
 
 #[test]
@@ -234,14 +234,14 @@ fn test_admin_can_set_max_batch_size() {
 }
 
 #[test]
-#[should_panic(expected = "outside configured limits")]
 fn test_amount_min_minus_1_reverts() {
     let env = Env::default();
     env.mock_all_auths();
     let (client, _admin) = deploy_and_init(&env, 100, 1_000);
     let merchant = Address::generate(&env);
     let payments = soroban_sdk::vec![&env, make_payment(&env, 99, "below-min")];
-    client.create_batch(&merchant, &payments);
+    let err = client.try_create_batch(&merchant, &payments).unwrap_err().unwrap();
+    assert_eq!(err, ContractError::PaymentAmountOutsideLimits);
 }
 
 #[test]
@@ -267,14 +267,14 @@ fn test_amount_equal_max_succeeds() {
 }
 
 #[test]
-#[should_panic(expected = "outside configured limits")]
 fn test_amount_max_plus_1_reverts() {
     let env = Env::default();
     env.mock_all_auths();
     let (client, _admin) = deploy_and_init(&env, 100, 1_000);
     let merchant = Address::generate(&env);
     let payments = soroban_sdk::vec![&env, make_payment(&env, 1_001, "above-max")];
-    client.create_batch(&merchant, &payments);
+    let err = client.try_create_batch(&merchant, &payments).unwrap_err().unwrap();
+    assert_eq!(err, ContractError::PaymentAmountOutsideLimits);
 }
 
 #[test]
