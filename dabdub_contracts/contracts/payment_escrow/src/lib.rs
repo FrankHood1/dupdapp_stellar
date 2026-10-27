@@ -515,9 +515,11 @@ impl PaymentEscrowContract {
         Self::transfer_from_contract(&env, &payment.merchant, remaining, &payment.asset_type);
         payment.released_amount = payment.amount;
         payment.status = PaymentStatus::Released;
+        let release_key = DataKey::Payment(payment_id.clone());
+        env.storage().persistent().set(&release_key, &payment);
         env.storage()
             .persistent()
-            .set(&DataKey::Payment(payment_id.clone()), &payment);
+            .extend_ttl(&release_key, MAX_TTL_LEDGERS, MAX_TTL_LEDGERS);
 
         env.events().publish(
             ("ESCROW", "release"),
@@ -552,9 +554,11 @@ impl PaymentEscrowContract {
         if payment.released_amount == payment.amount {
             payment.status = PaymentStatus::Released;
         }
+        let partial_key = DataKey::Payment(payment_id.clone());
+        env.storage().persistent().set(&partial_key, &payment);
         env.storage()
             .persistent()
-            .set(&DataKey::Payment(payment_id.clone()), &payment);
+            .extend_ttl(&partial_key, MAX_TTL_LEDGERS, MAX_TTL_LEDGERS);
 
         env.events().publish(
             ("ESCROW", "release"),
@@ -577,9 +581,11 @@ impl PaymentEscrowContract {
 
         payment.released_amount = payment.amount;
         payment.status = PaymentStatus::Expired;
+        let expire_key = DataKey::Payment(payment_id.clone());
+        env.storage().persistent().set(&expire_key, &payment);
         env.storage()
             .persistent()
-            .set(&DataKey::Payment(payment_id.clone()), &payment);
+            .extend_ttl(&expire_key, MAX_TTL_LEDGERS, MAX_TTL_LEDGERS);
 
         env.events().publish(
             ("ESCROW", "expired"),
@@ -602,9 +608,11 @@ impl PaymentEscrowContract {
         Self::transfer_from_contract(&env, &payment.customer, remaining, &payment.asset_type);
         payment.released_amount = payment.amount;
         payment.status = PaymentStatus::Expired;
+        let refund_key = DataKey::Payment(payment_id.clone());
+        env.storage().persistent().set(&refund_key, &payment);
         env.storage()
             .persistent()
-            .set(&DataKey::Payment(payment_id.clone()), &payment);
+            .extend_ttl(&refund_key, MAX_TTL_LEDGERS, MAX_TTL_LEDGERS);
 
         env.events().publish(
             ("ESCROW", "refund"),
@@ -651,9 +659,11 @@ impl PaymentEscrowContract {
         payment.status = PaymentStatus::Disputed;
         payment.dispute_resolution_deadline = resolution_deadline;
         payment.dispute_reason = Some(_reason.clone());
+        let dispute_key = DataKey::Payment(payment_id.clone());
+        env.storage().persistent().set(&dispute_key, &payment);
         env.storage()
             .persistent()
-            .set(&DataKey::Payment(payment_id.clone()), &payment);
+            .extend_ttl(&dispute_key, MAX_TTL_LEDGERS, MAX_TTL_LEDGERS);
 
         env.events().publish(
             ("ESCROW", "dispute"),
@@ -731,9 +741,11 @@ impl PaymentEscrowContract {
             PaymentStatus::Expired
         };
         payment.released_amount = payment.amount;
+        let resolve_key = DataKey::Payment(payment_id.clone());
+        env.storage().persistent().set(&resolve_key, &payment);
         env.storage()
             .persistent()
-            .set(&DataKey::Payment(payment_id.clone()), &payment);
+            .extend_ttl(&resolve_key, MAX_TTL_LEDGERS, MAX_TTL_LEDGERS);
 
         let topic = if winner == payment.merchant {
             "release"
@@ -822,10 +834,17 @@ impl PaymentEscrowContract {
     }
 
     pub fn get_payment(env: Env, payment_id: BytesN<32>) -> PaymentEscrow {
+        let key = DataKey::Payment(payment_id);
+        let payment: PaymentEscrow = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .expect("Payment not found");
+        // Extend TTL on every read to prevent archival before payment expiry.
         env.storage()
             .persistent()
-            .get(&DataKey::Payment(payment_id))
-            .expect("Payment not found")
+            .extend_ttl(&key, MAX_TTL_LEDGERS, MAX_TTL_LEDGERS);
+        payment
     }
 
     pub fn get_balance(env: Env, payment_id: BytesN<32>) -> i128 {

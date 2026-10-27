@@ -1,7 +1,10 @@
 #![cfg(test)]
 
+extern crate std;
+
 use crate::{AssetType, PaymentEscrowContract, PaymentEscrowContractClient, PaymentStatus};
 use merchant_registry::{MerchantRegistryContract, MerchantRegistryContractClient};
+use proptest::prelude::*;
 use soroban_sdk::{
     testutils::Address as _, testutils::Ledger, token, Address, BytesN, Env, String,
 };
