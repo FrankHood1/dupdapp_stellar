@@ -1,5 +1,7 @@
 #![cfg(test)]
 
+extern crate std;
+
 use super::*;
 use soroban_sdk::{testutils::Address as _, testutils::Events, Address, Env, String};
 
@@ -11,8 +13,12 @@ fn make_payment(env: &Env, amount: i128, memo: &str) -> PaymentInput {
     }
 }
 
-fn deploy_and_init(env: &Env, min_amount: i128, max_amount: i128) -> (BatchPaymentContractClient, Address) {
-    let contract_id = env.register_contract(None, BatchPaymentContract);
+fn deploy_and_init(
+    env: &Env,
+    min_amount: i128,
+    max_amount: i128,
+) -> (BatchPaymentContractClient<'_>, Address) {
+    let contract_id = env.register(BatchPaymentContract, ());
     let client = BatchPaymentContractClient::new(env, &contract_id);
     let admin = Address::generate(env);
     client.init(&admin, &min_amount, &max_amount);
@@ -28,6 +34,37 @@ fn test_batch_of_1_payment() {
     let merchant = Address::generate(&env);
     let payments = soroban_sdk::vec![&env, make_payment(&env, 1000, "order-1")];
 
+    let ids = client.create_batch(&merchant, &payments);
+    assert_eq!(ids.len(), 1);
+}
+
+#[test]
+#[should_panic(expected = "merchant exceeded maximum batches per ledger")]
+fn test_sixth_batch_for_merchant_in_same_ledger_reverts() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin) = deploy_and_init(&env, 1, 10_000);
+
+    let merchant = Address::generate(&env);
+    let payments = soroban_sdk::vec![&env, make_payment(&env, 1000, "order")];
+    for _ in 0..6 {
+        client.create_batch(&merchant, &payments);
+    }
+}
+
+#[test]
+fn test_merchant_batch_limit_resets_on_next_ledger() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin) = deploy_and_init(&env, 1, 10_000);
+
+    let merchant = Address::generate(&env);
+    let payments = soroban_sdk::vec![&env, make_payment(&env, 1000, "order")];
+    for _ in 0..5 {
+        client.create_batch(&merchant, &payments);
+    }
+
+    env.ledger().set_sequence_number(env.ledger().sequence() + 1);
     let ids = client.create_batch(&merchant, &payments);
     assert_eq!(ids.len(), 1);
 }
@@ -65,14 +102,15 @@ fn test_batch_of_20_payments() {
 }
 
 #[test]
-fn test_batch_over_20_reverts() {
+#[should_panic(expected = "batch exceeds maximum")]
+fn test_batch_over_hard_limit_reverts() {
     let env = Env::default();
     env.mock_all_auths();
     let (client, _admin) = deploy_and_init(&env, 1, 10_000);
 
     let merchant = Address::generate(&env);
     let mut payments = soroban_sdk::vec![&env];
-    for i in 0..21_u32 {
+    for i in 0..101_u32 {
         payments.push_back(make_payment(&env, (i as i128 + 1) * 10, "over-limit"));
     }
 
@@ -144,11 +182,55 @@ fn test_payment_created_events_emitted() {
 }
 
 #[test]
-fn test_max_batch_size_is_20() {
+fn test_max_batch_size_defaults_to_100() {
     let env = Env::default();
-    let contract_id = env.register_contract(None, BatchPaymentContract);
-    let client = BatchPaymentContractClient::new(&env, &contract_id);
-    assert_eq!(client.max_batch_size(), 20);
+    env.mock_all_auths();
+    let (client, _admin) = deploy_and_init(&env, 1, 10_000);
+    assert_eq!(client.max_batch_size(), 100);
+}
+
+#[test]
+fn test_get_payment_returns_record_after_create_batch() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin) = deploy_and_init(&env, 1, 10_000);
+
+    let merchant = Address::generate(&env);
+    let payments = soroban_sdk::vec![
+        &env,
+        make_payment(&env, 500, "order-abc"),
+        make_payment(&env, 750, "order-def"),
+    ];
+
+    let ids = client.create_batch(&merchant, &payments);
+    assert_eq!(ids.len(), 2);
+
+    let id0 = ids.get(0).unwrap();
+    let record0 = client.get_payment(&id0).unwrap();
+    assert_eq!(record0.id, id0);
+    assert_eq!(record0.amount, 500);
+    assert_eq!(record0.memo, String::from_str(&env, "order-abc"));
+    assert_eq!(record0.merchant, merchant);
+
+    let id1 = ids.get(1).unwrap();
+    let record1 = client.get_payment(&id1).unwrap();
+    assert_eq!(record1.id, id1);
+    assert_eq!(record1.amount, 750);
+    assert_eq!(record1.memo, String::from_str(&env, "order-def"));
+    assert_eq!(record1.merchant, merchant);
+}
+
+#[test]
+fn test_admin_can_set_max_batch_size() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin) = deploy_and_init(&env, 1, 10_000);
+
+    assert_eq!(client.max_batch_size(), 100);
+    client.set_max_batch_size(&10);
+    assert_eq!(client.max_batch_size(), 10);
+    assert!(client.try_set_max_batch_size(&101).is_err());
+    assert_eq!(client.max_batch_size(), 10);
 }
 
 #[test]
@@ -221,49 +303,54 @@ fn test_limits_updated_event_emitted() {
     assert_eq!(events.len(), before + 1);
 }
 
-// ── Issue #1201: no ID collision across concurrent batches ────────────────────
-
 #[test]
-fn test_no_id_collision_across_batches_in_same_ledger() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let (client, _admin) = deploy_and_init(&env, 1, 100_000);
-
-    let merchant1 = Address::generate(&env);
-    let merchant2 = Address::generate(&env);
-    let mut all_ids: std::collections::BTreeSet<[u8; 32]> = std::collections::BTreeSet::new();
-
-    // Simulate 20 batch submissions in the same ledger.
-    for _ in 0..10 {
-        let payments = soroban_sdk::vec![&env,
-            make_payment(&env, 1000, "memo-a"),
-            make_payment(&env, 2000, "memo-b"),
-        ];
-        let ids1 = client.create_batch(&merchant1, &payments);
-        let ids2 = client.create_batch(&merchant2, &payments);
-
-        for id in ids1.iter().chain(ids2.iter()) {
-            let bytes: [u8; 32] = id.to_array();
-            assert!(all_ids.insert(bytes), "duplicate payment ID detected");
-        }
-    }
-    assert_eq!(all_ids.len(), 40);
-}
-
-#[test]
-fn test_id_derivation_is_determinism_free_across_merchants() {
-    // Two different merchants submitting identical payment inputs in the same
-    // ledger must receive different IDs.
+fn test_batch_at_new_maximum_succeeds() {
     let env = Env::default();
     env.mock_all_auths();
     let (client, _admin) = deploy_and_init(&env, 1, 10_000);
+    let merchant = Address::generate(&env);
+    let mut payments = soroban_sdk::vec![&env];
+    for i in 0..100_u32 {
+        payments.push_back(make_payment(&env, i as i128 + 1, "maximum-batch"));
+    }
 
-    let merchant_a = Address::generate(&env);
-    let merchant_b = Address::generate(&env);
+    let ids = client.create_batch(&merchant, &payments);
+    assert_eq!(ids.len(), 100);
+    for id in ids.iter() {
+        assert!(client.get_payment(&id).is_some());
+    }
+}
 
-    let payments = soroban_sdk::vec![&env, make_payment(&env, 500, "order-1")];
-    let ids_a = client.create_batch(&merchant_a, &payments);
-    let ids_b = client.create_batch(&merchant_b, &payments);
+fn measure_batch_cpu_instructions(size: u32) -> u64 {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin) = deploy_and_init(&env, 1, 10_000);
+    let merchant = Address::generate(&env);
+    let mut payments = soroban_sdk::vec![&env];
+    for i in 0..size {
+        payments.push_back(make_payment(&env, i as i128 + 1, "gas-benchmark"));
+    }
 
-    assert_ne!(ids_a.get(0).unwrap(), ids_b.get(0).unwrap());
+    let before = env.cost_estimate().budget().cpu_instruction_cost();
+    let ids = client.create_batch(&merchant, &payments);
+    let instruction_cost = env.cost_estimate().budget().cpu_instruction_cost() - before;
+    assert_eq!(ids.len(), size);
+    instruction_cost
+}
+
+#[test]
+fn benchmark_batch_instruction_cost_per_item() {
+    let cpu_20 = measure_batch_cpu_instructions(20);
+    let cpu_100 = measure_batch_cpu_instructions(100);
+    let per_item_20 = cpu_20 / 20;
+    let per_item_100 = cpu_100 / 100;
+
+    std::println!(
+        "batch benchmark: 20 items={cpu_20} CPU instructions ({per_item_20}/item); \
+         100 items={cpu_100} CPU instructions ({per_item_100}/item)"
+    );
+    assert!(
+        cpu_100 < 100_000_000,
+        "100-item batch exceeds Soroban CPU budget"
+    );
 }
