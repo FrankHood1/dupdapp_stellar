@@ -56,6 +56,8 @@ impl PaymentRequestContract {
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::NextId, &0u64);
+        env.events()
+            .publish(("PAYMENT_REQUEST", "initialized"), (admin,));
         Ok(())
     }
 
@@ -110,6 +112,8 @@ impl PaymentRequestContract {
             .persistent()
             .set(&DataKey::Request(id), &request);
         env.storage().instance().set(&DataKey::NextId, &(id + 1));
+        env.events()
+            .publish(("PAYMENT_REQUEST", "created"), (request,));
 
         Ok(id)
     }
@@ -150,9 +154,11 @@ impl PaymentRequestContract {
         }
 
         request.status = PaymentRequestStatus::Cancelled;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Request(id), &request);
+        env.storage().persistent().set(&DataKey::Request(id), &request);
+        env.events().publish(
+            ("PAYMENT_REQUEST", "status_updated"),
+            (id, PaymentRequestStatus::Pending, PaymentRequestStatus::Cancelled),
+        );
         Ok(())
     }
 
@@ -163,10 +169,11 @@ impl PaymentRequestContract {
             .get(&DataKey::Request(id))
             .ok_or(Error::NotFound)?;
 
-        request.status = status;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Request(id), &request);
+        let old_status = request.status.clone();
+        request.status = status.clone();
+        env.storage().persistent().set(&DataKey::Request(id), &request);
+        env.events()
+            .publish(("PAYMENT_REQUEST", "status_updated"), (id, old_status, status));
         Ok(())
     }
 

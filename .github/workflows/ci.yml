@@ -54,11 +54,11 @@ jobs:
       - name: Install Rust wasm target
         run: rustup target add wasm32v1-none
 
-      # The upgrade tests load the built escrow WASM to exercise an in-place
-      # code replacement while preserving the contract's persistent storage.
-      - name: Build payment escrow WASM for upgrade tests
+      # The cargo workspace lives in dupdub_contracts/; there is no manifest at
+      # the repository root, so every cargo invocation has to run from there.
+      - name: cargo clippy
         working-directory: dabdub_contracts
-        run: cargo build --target wasm32v1-none --release -p payment-escrow
+        run: cargo clippy -- -D warnings
 
       - name: cargo test
         working-directory: dabdub_contracts
