@@ -8,6 +8,11 @@ use soroban_sdk::{
 
 const DEFAULT_PAYMENT_TTL: u32 = 100;
 const EMERGENCY_COOLDOWN_LEDGERS: u32 = 50;
+const UPGRADE_TEST_PAYMENT_TTL: u32 = 20_000;
+const PAYMENT_ESCROW_WASM: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../target/wasm32v1-none/release/payment_escrow.wasm"
+));
 
 type Setup = (
     Env,
@@ -209,6 +214,31 @@ fn test_constructor() {
     assert_eq!(client.get_registry(), None);
 }
 
+fn deposit_upgrade_test_payment(
+    client: &PaymentEscrowContractClient<'_>,
+    customer: &Address,
+    payment_id: &BytesN<32>,
+    merchant: &Address,
+) {
+    client.deposit(
+        customer,
+        payment_id,
+        merchant,
+        &250_000_000i128,
+        &UPGRADE_TEST_PAYMENT_TTL,
+        &AssetType::Usdc,
+    );
+}
+
+fn apply_test_upgrade(env: &Env, client: &PaymentEscrowContractClient<'_>, admin: &Address) {
+    let wasm_hash = env.deployer().upload_contract_wasm(PAYMENT_ESCROW_WASM);
+    client.schedule_upgrade(admin, &wasm_hash);
+
+    let (_, apply_ledger) = client.get_pending_upgrade().unwrap();
+    env.ledger().set_sequence_number(apply_ledger);
+    client.apply_upgrade(admin);
+}
+
 #[test]
 fn test_deposit_happy_path() {
     let (env, client, contract_id, _admin, customer, merchant, usdc, ..) = setup_env();
@@ -310,6 +340,55 @@ fn test_release_happy_path() {
     let token_client = token::Client::new(&env, &usdc);
     assert_eq!(token_client.balance(&merchant), 250_000_000);
     assert_eq!(token_client.balance(&contract_id), 0);
+}
+
+#[test]
+fn test_payment_survives_contract_upgrade() {
+    let (env, client, _contract_id, admin, customer, merchant, ..) = setup_env();
+    let payment_id = make_id(&env, 57);
+
+    deposit_upgrade_test_payment(&client, &customer, &payment_id, &merchant);
+    apply_test_upgrade(&env, &client, &admin);
+
+    let payment = client.get_payment(&payment_id);
+    assert_eq!(payment.payment_id, payment_id);
+    assert_eq!(payment.amount, 250_000_000);
+    assert_eq!(payment.released_amount, 0);
+    assert_eq!(payment.customer, customer);
+    assert_eq!(payment.merchant, merchant);
+    assert_eq!(payment.status, PaymentStatus::Pending);
+    assert_eq!(client.get_balance(&payment_id), 250_000_000);
+}
+
+#[test]
+fn test_release_succeeds_after_contract_upgrade() {
+    let (env, client, _contract_id, admin, customer, merchant, ..) = setup_env();
+    let payment_id = make_id(&env, 58);
+
+    deposit_upgrade_test_payment(&client, &customer, &payment_id, &merchant);
+    apply_test_upgrade(&env, &client, &admin);
+    client.release(&admin, &payment_id);
+
+    let payment = client.get_payment(&payment_id);
+    assert_eq!(payment.status, PaymentStatus::Released);
+    assert_eq!(payment.released_amount, 250_000_000);
+    assert_eq!(client.get_balance(&payment_id), 0);
+}
+
+#[test]
+fn test_dispute_succeeds_after_contract_upgrade() {
+    let (env, client, _contract_id, admin, customer, merchant, ..) = setup_env();
+    let payment_id = make_id(&env, 59);
+
+    deposit_upgrade_test_payment(&client, &customer, &payment_id, &merchant);
+    apply_test_upgrade(&env, &client, &admin);
+    let reason = String::from_str(&env, "dispute after contract upgrade");
+    client.dispute(&customer, &payment_id, &reason);
+
+    let payment = client.get_payment(&payment_id);
+    assert_eq!(payment.status, PaymentStatus::Disputed);
+    assert_eq!(payment.dispute_reason, Some(reason));
+    assert_eq!(client.get_balance(&payment_id), 250_000_000);
 }
 
 #[test]

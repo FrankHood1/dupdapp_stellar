@@ -75,7 +75,17 @@ Run the lifetime regressions with:
 
 ```sh
 cd dabdub_contracts
+cargo build --target wasm32v1-none --release -p payment-escrow
 cargo test -p payment-escrow test_max_ttl
+```
+
+The escrow upgrade regression tests also load the compiled WASM. Build it
+before running the workspace tests (the `make test` target does this for you):
+
+```sh
+cd dabdub_contracts
+cargo build --target wasm32v1-none --release -p payment-escrow
+cargo test -p payment-escrow upgrade
 ```
 
 ## Development
@@ -107,13 +117,13 @@ rustup target add wasm32v1-none
 make build              # debug build of all contracts
 make build-optimised    # release build + wasm-opt -Oz
 make check-wasm-size    # enforce the 64 KB per-contract WASM limit
-make test               # cargo test across the workspace
+make test               # build escrow WASM, then test across the workspace
 ```
 
-Or directly with cargo, from `dupdapp_contract/`:
+Or directly with cargo, from `dabdub_contracts/`:
 
 ```bash
-cd dupdapp_contract
+cargo build --target wasm32v1-none --release -p payment-escrow
 cargo build --target wasm32v1-none --release
 cargo test
 ```

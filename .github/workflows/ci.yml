@@ -54,10 +54,14 @@ jobs:
       - name: Install Rust wasm target
         run: rustup target add wasm32v1-none
 
-      # The cargo workspace lives in dupdub_contracts/; there is no manifest at
-      # the repository root, so every cargo invocation has to run from there.
+      # The upgrade tests load the built escrow WASM to exercise an in-place
+      # code replacement while preserving the contract's persistent storage.
+      - name: Build payment escrow WASM for upgrade tests
+        working-directory: dabdub_contracts
+        run: cargo build --target wasm32v1-none --release -p payment-escrow
+
       - name: cargo test
-        working-directory: dupdub_contracts
+        working-directory: dabdub_contracts
         run: cargo test
 
       # Property-based tests (proptest) live behind the `proptest` feature so
