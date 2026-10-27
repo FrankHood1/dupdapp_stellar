@@ -124,6 +124,8 @@ fn test_single_recipient_receives_full_amount() {
     assert_eq!(token.balance(&contract_id), 0);
 }
 
+// ── constructor validation ───────────────────────────────────────────────────
+
 #[test]
 #[should_panic(expected = "recipient shares must total 10000 bps")]
 fn test_constructor_rejects_invalid_share_total() {

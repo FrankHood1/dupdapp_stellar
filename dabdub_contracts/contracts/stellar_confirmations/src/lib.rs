@@ -8,10 +8,8 @@ use soroban_sdk::{
 
 // ── payment_escrow cross-contract interface ─────────────────────────────────
 //
-// Minimal mirror of payment_escrow's `PaymentEscrow` record and `get_payment`
-// entry point, following the same local-trait pattern liquidity_router uses
-// for its AmmClient (see contracts/liquidity_router/src/lib.rs). Field names,
-// types, and order must stay in sync with payment_escrow::PaymentEscrow.
+// Minimal mirror of payment_escrow's record and get_payment entry point.
+// Field names, types, and order must stay in sync with payment_escrow.
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -54,55 +52,14 @@ pub trait PaymentEscrowInterface {
 #[contracttype]
 enum DataKey {
     Admin,
-    ConfirmationCount,          // required ledger-close count (u32)
-    PaymentConfs(BytesN<32>),   // confirmed count so far for a payment (u32)
-    PaymentFirstLedger(BytesN<32>), // ledger_seq of the first confirmation
-    PaymentLastLedger(BytesN<32>),  // ledger_seq of the most recent confirmation
-    PaymentRequiredConfs(BytesN<32>), // required count snapshotted at first confirmation
-    PaymentSettling(BytesN<32>),    // bool — already transitioned
-    PaymentFailed(BytesN<32>),      // bool — terminal failure state
-    PaymentEscrowContract,      // optional Address of the payment_escrow contract
-}
-
-// ── cross-contract client ────────────────────────────────────────────────────
-
-/// Thin client interface mirroring the payment_escrow contract's
-/// `PaymentEscrow` record, used to cross-check `amount`/`merchant`
-/// before emitting `SettlementAuthorisedEvent`.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct PaymentEscrow {
-    pub payment_id: BytesN<32>,
-    pub amount: i128,
-    pub released_amount: i128,
-    pub merchant: Address,
-    pub customer: Address,
-    pub status: PaymentEscrowStatus,
-    pub expiry: u32,
-    pub dispute_window_end: u32,
-    pub dispute_reason: Option<soroban_sdk::String>,
-    pub asset_type: PaymentEscrowAssetType,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub enum PaymentEscrowStatus {
-    Pending,
-    Disputed,
-    Released,
-    Expired,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub enum PaymentEscrowAssetType {
-    Xlm,
-    Usdc,
-}
-
-#[contractclient(name = "PaymentEscrowClient")]
-pub trait PaymentEscrowInterface {
-    fn get_payment(env: Env, payment_id: BytesN<32>) -> PaymentEscrow;
+    ConfirmationCount,               // required ledger-close count (u32)
+    PaymentConfs(BytesN<32>),        // confirmed count so far for a payment (u32)
+    PaymentFirstLedger(BytesN<32>),  // ledger_seq of the first confirmation
+    PaymentLastLedger(BytesN<32>),   // ledger_seq of the most recent confirmation
+    PaymentRequiredConfs(BytesN<32>),// required count snapshotted at first confirmation
+    PaymentSettling(BytesN<32>),     // bool — already transitioned
+    PaymentFailed(BytesN<32>),       // bool — terminal failure state
+    PaymentEscrowContract,           // optional Address of the payment_escrow contract
 }
 
 // ── events ───────────────────────────────────────────────────────────────────
@@ -118,15 +75,15 @@ struct ConfirmationRecordedEvent {
 #[contracttype]
 struct SettlementAuthorisedEvent {
     payment_id: BytesN<32>,
-    ledger_seq: u32,   // ledger that pushed count over threshold
-    amount: i128,      // informational — set by caller
-    merchant: Address, // informational — set by caller
+    ledger_seq: u32,
+    amount: i128,
+    merchant: Address,
 }
 
 #[contracttype]
 struct ConfirmationFailedEvent {
     payment_id: BytesN<32>,
-    confirmations: u32, // confirmations accumulated at time of failure
+    confirmations: u32,
     required: u32,
 }
 
@@ -147,10 +104,9 @@ impl StellarConfirmationsContract {
     /// `ledger_seq` is the sequence number of the closed ledger.
     /// `amount` and `merchant` are forwarded into the SettlementAuthorised event
     /// so NestJS can trigger the fiat payout without a second lookup. When a
-    /// payment_escrow contract has been configured via
-    /// `set_payment_escrow_contract`, the final threshold-crossing call
-    /// cross-checks `amount`/`merchant` against `payment_escrow::get_payment`
-    /// and panics on a mismatch rather than trusting the caller blindly.
+    /// payment_escrow contract has been configured via `set_payment_escrow_contract`,
+    /// the final threshold-crossing call cross-checks `amount`/`merchant` against
+    /// `payment_escrow::get_payment` and panics on a mismatch.
     ///
     /// Returns the current confirmation count after this call.
     pub fn confirm_payment(
@@ -163,22 +119,6 @@ impl StellarConfirmationsContract {
     ) -> u32 {
         caller.require_auth();
         Self::require_admin(&env, &caller);
-
-        // Cross-contract check: if a payment_escrow contract is linked, verify
-        // `amount`/`merchant` against the real on-chain payment record for
-        // `payment_id` before recording this confirmation. This closes the gap
-        // where a compromised/malfunctioning monitor could fabricate
-        // confirmation/settlement events for arbitrary amount/merchant values.
-        if let Some(escrow_address) = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::PaymentEscrowContract)
-        {
-            let escrow_client = PaymentEscrowClient::new(&env, &escrow_address);
-            let payment = escrow_client.get_payment(&payment_id);
-            assert!(payment.amount == amount, "amount mismatch with payment_escrow record");
-            assert!(payment.merchant == merchant, "merchant mismatch with payment_escrow record");
-        }
 
         // Guard: ledger_seq must not be in the future relative to the actual chain state
         assert!(ledger_seq <= env.ledger().sequence(), "ledger_seq exceeds current ledger");
@@ -243,8 +183,7 @@ impl StellarConfirmationsContract {
         // Transition to Settling when threshold is reached
         if new_confs >= required {
             // If a payment_escrow contract is configured, cross-check the
-            // caller-supplied amount/merchant against the real escrow record
-            // before trusting them to trigger an off-chain payout.
+            // caller-supplied amount/merchant against the real escrow record.
             if let Some(escrow_address) = Self::get_payment_escrow_contract(env.clone()) {
                 let escrow_client = PaymentEscrowClient::new(&env, &escrow_address);
                 let payment = escrow_client.get_payment(&payment_id);
@@ -268,22 +207,16 @@ impl StellarConfirmationsContract {
         new_confs
     }
 
-    /// Admin: mark a stuck, sub-threshold payment as failed. This is the
-    /// terminal failure state for a payment that never accumulates enough
-    /// confirmations (e.g. a chain reorg or monitoring gap), mirroring the
-    /// `fail` pattern in the `payment_request` contract.
+    /// Admin: mark a stuck, sub-threshold payment as failed.
     pub fn fail_confirmation(env: Env, caller: Address, payment_id: BytesN<32>) {
         caller.require_auth();
         Self::require_admin(&env, &caller);
 
-        // Guard: cannot fail a payment that has already crossed the
-        // threshold and is settling — that path is final.
         let settling_key = DataKey::PaymentSettling(payment_id.clone());
         if env.storage().persistent().get::<_, bool>(&settling_key).unwrap_or(false) {
             panic!("payment already settling");
         }
 
-        // Guard: idempotent — cannot fail an already-failed payment.
         let failed_key = DataKey::PaymentFailed(payment_id.clone());
         if env.storage().persistent().get::<_, bool>(&failed_key).unwrap_or(false) {
             panic!("payment already failed");
@@ -308,9 +241,10 @@ impl StellarConfirmationsContract {
         );
     }
 
-    /// Admin: set (or clear) the payment_escrow contract address used to
+    /// Admin: set or clear the payment_escrow contract address used to
     /// cross-check amount/merchant before settlement is authorised.
-    pub fn set_payment_escrow_contract(env: Env, caller: Address, payment_escrow: Address) {
+    /// Pass `None` to unlink.
+    pub fn set_payment_escrow_contract(env: Env, caller: Address, contract: Option<Address>) {
         caller.require_auth();
         Self::require_admin(&env, &caller);
         env.storage().instance().set(&DataKey::PaymentEscrowContract, &payment_escrow);
