@@ -40,6 +40,7 @@ build:
 	cargo build --workspace
 
 test:
+	cd $(CONTRACTS_DIR) && cargo build --target wasm32v1-none --release -p payment-escrow
 	cargo test --workspace
 
 clean:

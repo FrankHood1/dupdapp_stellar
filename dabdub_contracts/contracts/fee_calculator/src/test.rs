@@ -2,7 +2,10 @@
 
 use crate::{FeeCalculatorContract, FeeCalculatorContractClient, FeeTier, FeeTiersUpdatedEvent};
 use proptest::prelude::*;
-use soroban_sdk::{testutils::{Address as _, Events as _, Ledger}, vec, Address, Env, IntoVal};
+use soroban_sdk::{
+    testutils::{Address as _, Events as _, Ledger},
+    vec, Address, Env, IntoVal,
+};
 
 fn setup_env() -> (
     Env,
@@ -86,28 +89,13 @@ fn test_volume_resets_after_30_days_by_ledger_count() {
     let (env, client, _admin, merchant, settlement_caller) = setup_env();
 
     client.calculate_fee(&settlement_caller, &merchant, &2_000); // puts merchant into 120 bps tier
-    let (_, _, bps_before_reset) =
-        client.calculate_fee(&settlement_caller, &merchant, &1);
+    let (_, _, bps_before_reset) = client.calculate_fee(&settlement_caller, &merchant, &1);
 
     assert_eq!(bps_before_reset, 120);
 
     env.ledger().with_mut(|li| li.sequence_number += 172_800);
 
-    let (_, _, bps_after_reset) =
-        client.calculate_fee(
-fn test_volume_resets_after_30_days_by_ledger_count() {
-    let (env, client, _admin, merchant, settlement_caller) = setup_env();
-
-    client.calculate_fee(&settlement_caller, &merchant, &2_000); // puts merchant into 120 bps tier
-    let (_, _, bps_before_reset) =
-        client.calculate_fee(&settlement_caller, &merchant, &1);
-
-    assert_eq!(bps_before_reset, 120);
-
-    env.ledger().with_mut(|li| li.sequence_number += 172_800);
-
-    let (_, _, bps_after_reset) =
-        client.calculate_fee(&settlement_caller, &merchant, &100);
+    let (_, _, bps_after_reset) = client.calculate_fee(&settlement_caller, &merchant, &100);
     assert_eq!(bps_after_reset, 150);
 }
 
@@ -295,20 +283,6 @@ fn test_non_settlement_caller_cannot_calculate_fee() {
     let attacker = Address::generate(&env);
 
     client.calculate_fee(&attacker, &merchant, &1_000);
-= Address::generate(&env);
-    let (fee, net, bps) = client.calculate_fee(&new_settlement, &merchant, &500);
-    assert_eq!(bps, 150);
-    assert!(fee > 0);
-    assert!(net > 0);
-}
-
-#[test]
-#[should_panic(expected = "caller is not the authorized settlement contract")]
-fn test_non_settlement_caller_cannot_calculate_fee() {
-    let (env, client, _admin, merchant, _settlement_caller) = setup_env();
-    let attacker = Address::generate(&env);
-
-    client.calculate_fee(&attacker, &merchant, &1_000);
 }
 
 /// Gas benchmark: `calculate_fee` against a 10-tier fee configuration.
@@ -361,6 +335,4 @@ proptest! {
         prop_assert!(net >= 0);
         prop_assert_eq!(fee + net, amount);
     }
-}
-
 }

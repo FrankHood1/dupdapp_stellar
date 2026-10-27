@@ -18,6 +18,14 @@ and apply ledger, wait for that ledger, then apply with admin authorization.
 Verify the executable hash and payment/storage invariants afterwards.
 `get_version` counts upgrades and is not the code release identity.
 
+`apply_upgrade` replaces the contract code in place; it does not rerun the
+constructor or clear persistent storage. Existing `Payment` entries remain
+available when the new code preserves their storage key and value schema.
+Validate an in-flight payment with `get_payment` and `get_balance` after
+upgrading, then confirm the expected settlement action (release or dispute)
+still succeeds. Keep the payment expiry and dispute window open long enough for
+the upgrade timelock to elapse.
+
 Code can be replaced with an earlier compatible WASM through an available
 upgrade path, but storage migrations and past transfers are not reversed.
 Do not use `stellar contract deploy` for an in-place rollback: it creates a new

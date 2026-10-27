@@ -21,6 +21,10 @@ jobs:
         with:
           targets: wasm32v1-none
 
+      - name: Check Rust formatting
+        working-directory: dabdub_contracts
+        run: cargo fmt -- --check
+
       # Cache the cargo registry (downloaded crate sources) and the workspace
       # target directory so dependencies are not re-downloaded and recompiled
       # on every run. The key is derived from the Cargo.lock hash so the cache
@@ -57,7 +61,7 @@ jobs:
         run: cargo clippy -- -D warnings
 
       - name: cargo test
-        working-directory: dupdub_contracts
+        working-directory: dabdub_contracts
         run: cargo test
 
       # Property-based tests (proptest) live behind the `proptest` feature so
@@ -330,4 +334,3 @@ jobs:
       - name: Run cargo audit (fail on HIGH or CRITICAL)
         working-directory: dabdub_contracts
         run: cargo audit --fail-severity high
-

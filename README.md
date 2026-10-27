@@ -75,6 +75,7 @@ Run the lifetime regressions with:
 
 ```sh
 cd dabdub_contracts
+cargo build --target wasm32v1-none --release -p payment-escrow
 cargo test -p payment-escrow test_max_ttl
 ```
 
@@ -100,6 +101,17 @@ Settlement records must use the exact fee and net returned by the calculator.
 - Rust with the `wasm32v1-none` target
 - [`stellar-cli`](https://developers.stellar.org/docs/tools/developer-tools) (for deployment)
 - `wasm-opt` (binaryen), for optimised release builds
+
+### Rust formatting
+
+Enable the repository-managed pre-commit hook once per clone:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+The hook checks formatting with `cargo fmt --all -- --check`. To apply
+formatting, run `cargo fmt --all` from `dabdub_contracts/`.
 
 ```bash
 rustup target add wasm32v1-none
@@ -147,7 +159,7 @@ Use the deployed IDs from `deployments/testnet.json` for the contract ID list.
 Or directly with cargo, from `dupdapp_contract/`:
 
 ```bash
-cd dupdapp_contract
+cargo build --target wasm32v1-none --release -p payment-escrow
 cargo build --target wasm32v1-none --release
 cargo test
 ```

@@ -11,6 +11,11 @@ use soroban_sdk::{
 
 const DEFAULT_PAYMENT_TTL: u32 = 100;
 const EMERGENCY_COOLDOWN_LEDGERS: u32 = 50;
+const UPGRADE_TEST_PAYMENT_TTL: u32 = 20_000;
+const PAYMENT_ESCROW_WASM: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../target/wasm32v1-none/release/payment_escrow.wasm"
+));
 
 type Setup = (
     Env,
@@ -64,7 +69,9 @@ fn setup_env() -> Setup {
     let usdc = env
         .register_stellar_asset_contract_v2(token_admin.clone())
         .address();
-    let xlm = env.register_stellar_asset_contract_v2(token_admin).address();
+    let xlm = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
 
     let emergency_signer_one = Address::generate(&env);
     let emergency_signer_two = Address::generate(&env);
@@ -132,7 +139,9 @@ fn setup_with_registry() -> (
     let usdc = env
         .register_stellar_asset_contract_v2(token_admin.clone())
         .address();
-    let xlm = env.register_stellar_asset_contract_v2(token_admin).address();
+    let xlm = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
 
     let emergency_signer_one = Address::generate(&env);
     let emergency_signer_two = Address::generate(&env);
@@ -207,6 +216,31 @@ fn test_constructor() {
     assert_eq!(client.get_default_ttl_ledgers(), DEFAULT_PAYMENT_TTL);
     assert_eq!(client.get_version(), 1);
     assert_eq!(client.get_registry(), None);
+}
+
+fn deposit_upgrade_test_payment(
+    client: &PaymentEscrowContractClient<'_>,
+    customer: &Address,
+    payment_id: &BytesN<32>,
+    merchant: &Address,
+) {
+    client.deposit(
+        customer,
+        payment_id,
+        merchant,
+        &250_000_000i128,
+        &UPGRADE_TEST_PAYMENT_TTL,
+        &AssetType::Usdc,
+    );
+}
+
+fn apply_test_upgrade(env: &Env, client: &PaymentEscrowContractClient<'_>, admin: &Address) {
+    let wasm_hash = env.deployer().upload_contract_wasm(PAYMENT_ESCROW_WASM);
+    client.schedule_upgrade(admin, &wasm_hash);
+
+    let (_, apply_ledger) = client.get_pending_upgrade().unwrap();
+    env.ledger().set_sequence_number(apply_ledger);
+    client.apply_upgrade(admin);
 }
 
 #[test]
@@ -301,6 +335,55 @@ fn test_release_happy_path() {
     let token_client = token::Client::new(&env, &usdc);
     assert_eq!(token_client.balance(&merchant), 250_000_000);
     assert_eq!(token_client.balance(&contract_id), 0);
+}
+
+#[test]
+fn test_payment_survives_contract_upgrade() {
+    let (env, client, _contract_id, admin, customer, merchant, ..) = setup_env();
+    let payment_id = make_id(&env, 57);
+
+    deposit_upgrade_test_payment(&client, &customer, &payment_id, &merchant);
+    apply_test_upgrade(&env, &client, &admin);
+
+    let payment = client.get_payment(&payment_id);
+    assert_eq!(payment.payment_id, payment_id);
+    assert_eq!(payment.amount, 250_000_000);
+    assert_eq!(payment.released_amount, 0);
+    assert_eq!(payment.customer, customer);
+    assert_eq!(payment.merchant, merchant);
+    assert_eq!(payment.status, PaymentStatus::Pending);
+    assert_eq!(client.get_balance(&payment_id), 250_000_000);
+}
+
+#[test]
+fn test_release_succeeds_after_contract_upgrade() {
+    let (env, client, _contract_id, admin, customer, merchant, ..) = setup_env();
+    let payment_id = make_id(&env, 58);
+
+    deposit_upgrade_test_payment(&client, &customer, &payment_id, &merchant);
+    apply_test_upgrade(&env, &client, &admin);
+    client.release(&admin, &payment_id);
+
+    let payment = client.get_payment(&payment_id);
+    assert_eq!(payment.status, PaymentStatus::Released);
+    assert_eq!(payment.released_amount, 250_000_000);
+    assert_eq!(client.get_balance(&payment_id), 0);
+}
+
+#[test]
+fn test_dispute_succeeds_after_contract_upgrade() {
+    let (env, client, _contract_id, admin, customer, merchant, ..) = setup_env();
+    let payment_id = make_id(&env, 59);
+
+    deposit_upgrade_test_payment(&client, &customer, &payment_id, &merchant);
+    apply_test_upgrade(&env, &client, &admin);
+    let reason = String::from_str(&env, "dispute after contract upgrade");
+    client.dispute(&customer, &payment_id, &reason);
+
+    let payment = client.get_payment(&payment_id);
+    assert_eq!(payment.status, PaymentStatus::Disputed);
+    assert_eq!(payment.dispute_reason, Some(reason));
+    assert_eq!(client.get_balance(&payment_id), 250_000_000);
 }
 
 #[test]
@@ -563,7 +646,11 @@ fn test_resolve_dispute_to_customer() {
     let payment_id = make_id(&env, 1);
 
     deposit_default_ttl(&client, &customer, &payment_id, &merchant, 250_000_000i128);
-    client.dispute(&merchant, &payment_id, &String::from_str(&env, "chargeback"));
+    client.dispute(
+        &merchant,
+        &payment_id,
+        &String::from_str(&env, "chargeback"),
+    );
     client.resolve_dispute(&admin, &payment_id, &customer);
 
     let payment = client.get_payment(&payment_id);
@@ -581,7 +668,11 @@ fn test_resolve_dispute_to_merchant() {
     let payment_id = make_id(&env, 1);
 
     deposit_default_ttl(&client, &customer, &payment_id, &merchant, 250_000_000i128);
-    client.dispute(&customer, &payment_id, &String::from_str(&env, "investigate"));
+    client.dispute(
+        &customer,
+        &payment_id,
+        &String::from_str(&env, "investigate"),
+    );
     client.resolve_dispute(&admin, &payment_id, &merchant);
 
     let payment = client.get_payment(&payment_id);
@@ -779,7 +870,13 @@ fn test_emergency_drain_cooldown_prevents_repeated_drain() {
     ) = setup_env();
 
     let payment_id_a = make_id(&env, 53);
-    deposit_default_ttl(&client, &customer, &payment_id_a, &merchant, 100_000_000i128);
+    deposit_default_ttl(
+        &client,
+        &customer,
+        &payment_id_a,
+        &merchant,
+        100_000_000i128,
+    );
     client.emergency_drain(
         &emergency_signer_one,
         &emergency_signer_one,
@@ -994,7 +1091,9 @@ fn test_max_ttl_rejects_early_refund_and_allows_refund_after_expiry() {
         env.storage().instance().extend_ttl(ttl + 1, ttl + 1);
         for owner in [&contract_id, &customer] {
             let key = (soroban_sdk::symbol_short!("Balance"), owner.clone());
-            env.storage().persistent().extend_ttl(&key, ttl + 1, ttl + 1);
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, ttl + 1, ttl + 1);
         }
     });
     env.ledger().set_sequence_number(expiry);
