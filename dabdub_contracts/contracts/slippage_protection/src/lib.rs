@@ -105,9 +105,10 @@ impl SlippageProtectionContract {
         }
 
         let old_bps = Self::pair_max_slippage(&env, &asset_a, &asset_b);
-        env.storage()
-            .instance()
-            .set(&DataKey::PairMaxSlippageBps(asset_a.clone(), asset_b.clone()), &bps);
+        env.storage().instance().set(
+            &DataKey::PairMaxSlippageBps(asset_a.clone(), asset_b.clone()),
+            &bps,
+        );
 
         env.events().publish(
             ("SLIPPAGE_PROTECTION", "pair_max_slippage_set"),

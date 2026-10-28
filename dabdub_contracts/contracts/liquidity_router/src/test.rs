@@ -53,10 +53,7 @@ impl MockToken {
     }
 
     pub fn balance(env: Env, id: Address) -> i128 {
-        env.storage()
-            .instance()
-            .get(&("bal", id))
-            .unwrap_or(0)
+        env.storage().instance().get(&("bal", id)).unwrap_or(0)
     }
 
     pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
@@ -66,7 +63,9 @@ impl MockToken {
         if from_bal < amount {
             panic!("insufficient balance");
         }
-        env.storage().instance().set(&from_key, &(from_bal - amount));
+        env.storage()
+            .instance()
+            .set(&from_key, &(from_bal - amount));
         let to_key = ("bal", to.clone());
         let to_bal: i128 = env.storage().instance().get(&to_key).unwrap_or(0);
         env.storage().instance().set(&to_key, &(to_bal + amount));

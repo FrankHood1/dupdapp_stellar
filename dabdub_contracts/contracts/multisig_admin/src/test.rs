@@ -3,7 +3,13 @@
 use super::*;
 use soroban_sdk::{testutils::Address as _, vec, Address, Bytes, Env, String};
 
-fn setup_env() -> (Env, MultisigAdminContractClient<'static>, Address, Address, Address) {
+fn setup_env() -> (
+    Env,
+    MultisigAdminContractClient<'static>,
+    Address,
+    Address,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -168,7 +174,13 @@ fn test_non_admin_cannot_propose_admin_change() {
 // Generic action dispatch: propose_action / approve_action / execute_action
 // ---------------------------------------------------------------------------
 
-fn setup_2_of_3() -> (Env, MultisigAdminContractClient<'static>, Address, Address, Address) {
+fn setup_2_of_3() -> (
+    Env,
+    MultisigAdminContractClient<'static>,
+    Address,
+    Address,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -219,12 +231,7 @@ fn test_propose_action_only_signer1() {
     let (env, client, signer1, _signer2, _signer3) = setup_2_of_3();
     let target = Address::generate(&env);
 
-    let id = client.propose_action(
-        &signer1,
-        &op(&env, "transfer"),
-        &target,
-        &args(&env),
-    );
+    let id = client.propose_action(&signer1, &op(&env, "transfer"), &target, &args(&env));
     assert_eq!(id, 0);
 
     let action = client.get_action(&id).unwrap();
@@ -363,7 +370,8 @@ fn test_execute_action_after_ttl_expires() {
     client.approve_action(&signer2, &id);
 
     // Advance ledger past the configured TTL.
-    env.ledger().set_sequence_number(env.ledger().sequence() + 100_000);
+    env.ledger()
+        .set_sequence_number(env.ledger().sequence() + 100_000);
 
     client.execute_action(&signer1, &id);
 }

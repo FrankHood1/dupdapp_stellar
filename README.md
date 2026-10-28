@@ -75,8 +75,24 @@ Run the lifetime regressions with:
 
 ```sh
 cd dabdub_contracts
+cargo build --target wasm32v1-none --release -p payment-escrow
 cargo test -p payment-escrow test_max_ttl
 ```
+
+## Fee accuracy
+
+`fee_calculator` computes fees using integer basis points:
+
+```text
+fee = amount * fee_bps / 10,000
+net = amount - fee
+```
+
+`amount` and fee-tier thresholds must use the same smallest-unit denomination.
+Integer division drops any fractional smallest unit, so the charged fee is
+rounded down and differs from the exact percentage by less than one smallest
+unit. For example, a 150 bps fee on 900 units is 13 units, with 887 units net.
+Settlement records must use the exact fee and net returned by the calculator.
 
 ## Development
 
@@ -85,6 +101,17 @@ cargo test -p payment-escrow test_max_ttl
 - Rust with the `wasm32v1-none` target
 - [`stellar-cli`](https://developers.stellar.org/docs/tools/developer-tools) (for deployment)
 - `wasm-opt` (binaryen), for optimised release builds
+
+### Rust formatting
+
+Enable the repository-managed pre-commit hook once per clone:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+The hook checks formatting with `cargo fmt --all -- --check`. To apply
+formatting, run `cargo fmt --all` from `dabdub_contracts/`.
 
 ```bash
 rustup target add wasm32v1-none
@@ -97,12 +124,42 @@ make build              # debug build of all contracts
 make build-optimised    # release build + wasm-opt -Oz
 make check-wasm-size    # enforce the 64 KB per-contract WASM limit
 make test               # cargo test across the workspace
+make deploy-testnet     # deploy and initialize all contracts on Stellar testnet
 ```
+
+### Manual testnet deployment
+
+`make deploy-testnet` builds all contract WASMs and deploys all 17 contracts to
+the public Stellar testnet. Configure the public addresses and contract
+parameters listed in [deployment configuration](docs/deployment_configuration.md)
+as environment variables before running it. The configured
+`SOROBAN_SOURCE_ACCOUNT` (default `deployer`) must already exist in the Stellar
+CLI key store, be funded on testnet, and have an address matching
+`DEPLOY_ADMIN`, because deployment initializes admin-controlled contracts and
+registers the resulting IDs.
+
+The command writes each deployed contract ID to
+[`deployments/testnet.json`](deployments/testnet.json) as soon as deployment
+succeeds. A failed run leaves the IDs from its completed deployments available
+for inspection; rerunning starts a new deployment and replaces that file. Keep
+the deployer key out of environment files committed to the repository.
+
+### Soroban contract events
+
+New custom contract event topics use `(CONTRACT, action_name)`: an uppercase
+contract identifier followed by a lowercase snake-case action. Existing topic
+names remain unchanged for compatibility, and event payloads contain the
+values needed to reconstruct each change. The backend indexer polls Soroban RPC and
+persists raw contract events and its paging cursor in PostgreSQL. Configure
+`SOROBAN_RPC_URL`, `SOROBAN_EVENT_CONTRACT_IDS` (comma-separated contract IDs),
+and optionally `SOROBAN_EVENT_START_LEDGER` and
+`SOROBAN_EVENT_POLL_INTERVAL_MS` in the backend environment.
+Use the deployed IDs from `deployments/testnet.json` for the contract ID list.
 
 Or directly with cargo, from `dupdapp_contract/`:
 
 ```bash
-cd dupdapp_contract
+cargo build --target wasm32v1-none --release -p payment-escrow
 cargo build --target wasm32v1-none --release
 cargo test
 ```
@@ -174,4 +231,3 @@ Grafana/Loki/Promtail configs under [`grafana/`](grafana/) and [`docker-compose.
 
 <!-- handsoff-issue-1215 -->
 - #1215: [P1] merchant_registry: add merchant metadata fields (website, contact, country)
-

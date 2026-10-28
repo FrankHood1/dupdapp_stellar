@@ -1,7 +1,8 @@
 #![cfg(test)]
 
 use crate::{
-    MerkleProofNode, ReconciliationContract, ReconciliationContractClient, ReconciliationSubmittedEvent,
+    MerkleProofNode, ReconciliationContract, ReconciliationContractClient,
+    ReconciliationSubmittedEvent,
 };
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
@@ -23,8 +24,12 @@ fn make_id(env: &Env, seed: u8) -> BytesN<32> {
     BytesN::from_array(env, &[seed; 32])
 }
 
-fn hash_leaf(env: &Env, payment_id: &BytesN<32>) -> BytesN<32> { ReconciliationContract::hash_leaf(env, payment_id) }
-fn hash_pair(env: &Env, left: &BytesN<32>, right: &BytesN<32>) -> BytesN<32> { ReconciliationContract::hash_pair(env, left, right) }
+fn hash_leaf(env: &Env, payment_id: &BytesN<32>) -> BytesN<32> {
+    ReconciliationContract::hash_leaf(env, payment_id)
+}
+fn hash_pair(env: &Env, left: &BytesN<32>, right: &BytesN<32>) -> BytesN<32> {
+    ReconciliationContract::hash_pair(env, left, right)
+}
 
 #[test]
 fn test_admin_can_submit_merkle_root_and_store_batch() {
@@ -34,7 +39,11 @@ fn test_admin_can_submit_merkle_root_and_store_batch() {
 
     let payment_a = make_id(&env, 1);
     let payment_b = make_id(&env, 2);
-    let root = hash_pair(&env, &hash_leaf(&env, &payment_a), &hash_leaf(&env, &payment_b));
+    let root = hash_pair(
+        &env,
+        &hash_leaf(&env, &payment_a),
+        &hash_leaf(&env, &payment_b),
+    );
 
     client.submit_merkle_root(&admin, &root);
     let batch = client.get_current_batch().unwrap();
@@ -312,8 +321,13 @@ fn test_verify_settlement_proof_rejects_excessive_depth() {
     let payment = make_id(&env, 80);
     let root = hash_leaf(&env, &payment);
     let batch = client.submit_merkle_root(&admin, &root);
-    let node = MerkleProofNode { sibling: make_id(&env, 81), is_left: false };
+    let node = MerkleProofNode {
+        sibling: make_id(&env, 81),
+        is_left: false,
+    };
     let mut proof = vec![&env];
-    for _ in 0..65 { proof.push_back(node.clone()); }
+    for _ in 0..65 {
+        proof.push_back(node.clone());
+    }
     client.verify_settlement_proof(&batch, &payment, &proof);
 }

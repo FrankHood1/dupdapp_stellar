@@ -84,7 +84,9 @@ impl AdminAuthContract {
     /// are created exclusively through `add_admin` (the CLI seed/script path).
     pub fn __constructor(env: Env, super_admin: Address) {
         env.storage().instance().set(&DataKey::Version, &VERSION);
-        env.storage().instance().set(&DataKey::SuperAdmin, &super_admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::SuperAdmin, &super_admin);
         Self::save(
             &env,
             AdminUser {
@@ -104,11 +106,6 @@ impl AdminAuthContract {
         env.storage()
             .instance()
             .get(&DataKey::Version)
-    /// Return the contract ABI version stored at construction time.
-    pub fn get_version(env: Env) -> u32 {
-        env.storage()
-            .instance()
-            .get(&DataKey::Version)
             .unwrap_or(VERSION)
     }
 
@@ -119,7 +116,10 @@ impl AdminAuthContract {
     pub fn add_admin(env: Env, caller: Address, admin: Address, role: AdminRole) {
         caller.require_auth();
         Self::require_super_admin(&env, &caller);
-        let existing: Option<AdminUser> = env.storage().persistent().get(&DataKey::Admin(admin.clone()));
+        let existing: Option<AdminUser> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin(admin.clone()));
         if let Some(ref old_user) = existing {
             // Role update on an existing admin — emit a distinct event.
             Self::save(
@@ -158,10 +158,7 @@ impl AdminAuthContract {
             env.storage().instance().set(&DataKey::AdminIndex, &index);
             env.events().publish(
                 ("ADMIN_AUTH", "admin_added"),
-                AdminAddedEvent {
-                    admin,
-                    role,
-                },
+                AdminAddedEvent { admin, role },
             );
         }
     }
@@ -195,10 +192,8 @@ impl AdminAuthContract {
             env.storage().instance().set(&DataKey::AdminIndex, &index);
         }
 
-        env.events().publish(
-            ("ADMIN_AUTH", "admin_revoked"),
-            AdminRevokedEvent { admin },
-        );
+        env.events()
+            .publish(("ADMIN_AUTH", "admin_revoked"), AdminRevokedEvent { admin });
     }
 
     /// Transfer SuperAdmin rights to a new address. SuperAdmin only (#1042).
@@ -209,10 +204,15 @@ impl AdminAuthContract {
         let previous = caller.clone();
 
         // Update the SuperAdmin key
-        env.storage().instance().set(&DataKey::SuperAdmin, &new_super_admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::SuperAdmin, &new_super_admin);
 
         // Ensure the new super admin has an AdminUser record with SuperAdmin role
-        let is_new = !env.storage().persistent().has(&DataKey::Admin(new_super_admin.clone()));
+        let is_new = !env
+            .storage()
+            .persistent()
+            .has(&DataKey::Admin(new_super_admin.clone()));
         Self::save(
             &env,
             AdminUser {
@@ -266,14 +266,20 @@ impl AdminAuthContract {
 
     /// True when the address is an active admin in the store.
     pub fn is_admin(env: Env, admin: Address) -> bool {
-        match env.storage().persistent().get::<DataKey, AdminUser>(&DataKey::Admin(admin)) {
+        match env
+            .storage()
+            .persistent()
+            .get::<DataKey, AdminUser>(&DataKey::Admin(admin))
+        {
             Some(user) => user.active,
             None => false,
         }
     }
 
     fn save(env: &Env, user: AdminUser) {
-        env.storage().persistent().set(&DataKey::Admin(user.admin.clone()), &user);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Admin(user.admin.clone()), &user);
     }
 
     fn require_super_admin(env: &Env, caller: &Address) {
@@ -284,6 +290,8 @@ impl AdminAuthContract {
     }
 
     fn save(env: &Env, user: AdminUser) {
-        env.storage().persistent().set(&DataKey::Admin(user.admin.clone()), &user);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Admin(user.admin.clone()), &user);
     }
 }

@@ -104,7 +104,9 @@ impl MultisigAdminContract {
         let admins = vec![&env, admin1, admin2, admin3];
         env.storage().instance().set(&DataKey::Admins, &admins);
         env.storage().instance().set(&DataKey::Threshold, &2u32);
-        env.storage().instance().set(&DataKey::NextProposalId, &0u64);
+        env.storage()
+            .instance()
+            .set(&DataKey::NextProposalId, &0u64);
     }
 
     pub fn propose(env: Env, caller: Address, operation: String, args: Bytes) -> u64 {
@@ -114,13 +116,19 @@ impl MultisigAdminContract {
             panic!("operation must not be empty");
         }
 
-        let mut next_id: u64 = env.storage().instance().get(&DataKey::NextProposalId).unwrap_or(0);
+        let mut next_id: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::NextProposalId)
+            .unwrap_or(0);
         let proposal_id = next_id;
         // Use checked arithmetic so that exhausting the u64 id space fails
         // loudly instead of silently reusing an id (which would overwrite an
         // existing stored Proposal at the same key).
         next_id = next_id.checked_add(1).expect("proposal id overflow");
-        env.storage().instance().set(&DataKey::NextProposalId, &next_id);
+        env.storage()
+            .instance()
+            .set(&DataKey::NextProposalId, &next_id);
 
         let now = env.ledger().timestamp();
         let mut approvals = vec![&env];
@@ -178,10 +186,16 @@ impl MultisigAdminContract {
             panic!("action_type must not be empty");
         }
 
-        let mut next_id: u64 = env.storage().instance().get(&DataKey::NextProposalId).unwrap_or(0);
+        let mut next_id: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::NextProposalId)
+            .unwrap_or(0);
         let proposal_id = next_id;
         next_id = next_id.checked_add(1).expect("proposal id overflow");
-        env.storage().instance().set(&DataKey::NextProposalId, &next_id);
+        env.storage()
+            .instance()
+            .set(&DataKey::NextProposalId, &next_id);
 
         let now = env.ledger().timestamp();
         let mut approvals = vec![&env];
